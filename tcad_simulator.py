@@ -71936,6 +71936,13 @@ def _webui_worker_main(
                     etch_params = normalize_params("Etch", step.params)
                     etch_params.update(normalize_params("Etch", payload["params"]))
                     _prepare_etch_execution(etch_params, material_db)
+                elif isinstance(step, StructureEtchStep) and isinstance(payload.get("params"), dict):
+                    from recipe_planner.schema import normalize_params, parameter_errors
+                    etch_params = normalize_params(step.name, step.params)
+                    etch_params.update(normalize_params(step.name, payload["params"]))
+                    errors = parameter_errors(step.name, etch_params, material_db=material_db)
+                    if errors:
+                        raise ValueError("; ".join(errors))
                 if "loop" in payload:
                     try:
                         step.loop = str(payload.get("loop", "") or "").strip()[:80]

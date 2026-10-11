@@ -229,6 +229,58 @@ class DepthWindowEtchTests(unittest.TestCase):
                 facade.set_step(0, params)
             self.assertEqual(facade.recipe()[0].to_json(), before)
 
+    def test_material_booleans_rejected_by_shared_contract_and_m4_atomically(self):
+        from process_api import ProcessCadFacade, ProcessCadError
+        for mode in ('Standard', 'Depth window'):
+            facade = ProcessCadFacade(grid=32)
+            facade.load_recipe_blob({'steps': [{'name': 'Structure Etch', 'params': {'etch_mode': mode}}]})
+            self.addCleanup(facade._model.parallel.shutdown)
+            facade._statuses[0] = 'done'
+            before = facade.recipe()[0].to_json()
+            grid = facade._model.grid.copy()
+            statuses = dict(facade._statuses)
+            for value in (True, False, np.bool_(True), np.bool_(False)):
+                params = {'etch_mode': mode, 'material': value}
+                with self.subTest(mode=mode, value=value):
+                    with self.assertRaisesRegex(ValueError, 'material'):
+                        self.api.parse_window_params(params)
+                    self.assertTrue(parameter_errors('Structure Etch', params, material_db=self.db))
+                    with self.assertRaises(ProcessCadError):
+                        facade.set_step(0, {'material': value}, enabled=False, group='must not publish')
+                    self.assertEqual(facade.recipe()[0].to_json(), before)
+                    self.assertEqual(facade._statuses, statuses)
+                    np.testing.assert_array_equal(facade._model.grid, grid)
+            mid = self.db.id_for('Silicon')
+            self.assertEqual(parameter_errors('Structure Etch', {'etch_mode': mode, 'material': mid}, material_db=self.db), [])
+            facade.set_step(0, {'material': mid})
+            self.assertEqual(facade.recipe()[0].params['material'], mid)
+
+    def test_huge_active_numbers_rejected_without_overflow_and_drafts_ignored(self):
+        from process_api import ProcessCadFacade, ProcessCadError
+        huge = 10**400
+        cases = [('Opening plane', key) for key in ('start_depth_nm', 'end_depth_nm', 'etch_distance_nm', 'directionality_percent')]
+        cases += [('Fixed Z', key) for key in ('lower_z_nm', 'upper_z_nm')]
+        for reference, key in cases:
+            params = {'etch_mode': 'Depth window', 'depth_reference': reference, key: huge}
+            with self.subTest(reference=reference, key=key):
+                with self.assertRaisesRegex(ValueError, key):
+                    self.api.parse_window_params(params)
+                self.assertTrue(parameter_errors('Structure Etch', params, material_db=self.db))
+        facade = ProcessCadFacade(grid=32)
+        facade.load_recipe_blob({'steps': [{'name': 'Structure Etch', 'params': {}}]})
+        self.addCleanup(facade._model.parallel.shutdown)
+        facade.set_step(0, {'start_depth_nm': huge})
+        self.assertEqual(facade.recipe()[0].params['start_depth_nm'], huge)
+        before = facade.recipe()[0].to_json()
+        statuses = dict(facade._statuses)
+        for params in ({'depth_nm': huge}, {'etch_mode': 'Depth window'}):
+            with self.subTest(params=params), self.assertRaises(ProcessCadError):
+                facade.set_step(0, params)
+            self.assertEqual(facade.recipe()[0].to_json(), before)
+            self.assertEqual(facade._statuses, statuses)
+        for params in ({'start_depth_nm': huge}, {'etch_mode': 'Depth window', 'depth_reference': 'Fixed Z', 'start_depth_nm': huge, 'end_depth_nm': huge}):
+            self.assertEqual(parameter_errors('Structure Etch', params, material_db=self.db), [])
+
 
 class DepthWindowMetadataHTTPTests(unittest.TestCase):
     # Exercise the production HTTP route using the established isolated server fixture.
@@ -236,6 +288,17 @@ class DepthWindowMetadataHTTPTests(unittest.TestCase):
     setUp = _Fixture.setUp
     _request = _Fixture._request
     request = _Fixture.request
+
+    def test_m2_material_booleans_rejected_atomically_in_both_modes(self):
+        for mode in ('Standard', 'Depth window'):
+            recipe = self.request('POST', '/api/recipe/add', {'name': 'Structure Etch', 'params': {'etch_mode': mode}})['result']
+            before = self.request('GET', '/api/init')['result']['recipe']
+            timeline = self.request('POST', '/api/timeline/get', {})['result']
+            for value in (True, False):
+                with self.subTest(mode=mode, value=value):
+                    self.request('POST', '/api/step/set', {'index': len(recipe)-1, 'params': {'material': value}}, ok=False)
+                    self.assertEqual(self.request('GET', '/api/init')['result']['recipe'], before)
+                    self.assertEqual(self.request('POST', '/api/timeline/get', {})['result'], timeline)
 
     def test_m2_factory_and_configured_step_publish_conditions_and_preserve_drafts(self):
         init = self.request('GET', '/api/init')['result']

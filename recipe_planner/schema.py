@@ -71,6 +71,13 @@ def parameter_errors(name, params, schema=None, material_db=None):
         if spec["type"] in ("float", "int"):
             if value is None and spec["default"] is None:
                 continue
+            if name == "Structure Etch":
+                from structure_cad.depth_window_etch import _finite
+                try:
+                    _finite(params, key, spec["default"])
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
             if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
                 errors.append(f"参数 {key} 必须是有限数值")
                 continue

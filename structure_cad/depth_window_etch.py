@@ -31,9 +31,15 @@ class ResolvedWindow:
 
 def _finite(params, key, default):
     value = params.get(key, default)
-    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real) or not math.isfinite(value):
+    if isinstance(value, (bool, np.bool_)) or not isinstance(value, Real):
         raise ValueError(f'{key} requires a finite number, not a boolean')
-    return float(value)
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(f'{key} requires a finite representable number') from None
+    if not math.isfinite(number):
+        raise ValueError(f'{key} requires a finite number')
+    return number
 
 
 def parse_window_params(params):
@@ -46,6 +52,8 @@ def parse_window_params(params):
     unknown = set(params) - allowed
     if unknown:
         raise ValueError(f'Unknown Structure Etch parameter: {sorted(unknown, key=str)[0]}')
+    if isinstance(params.get('material'), (bool, np.bool_)):
+        raise ValueError('material requires a registered material, not a boolean')
     mode = params.get('etch_mode', 'Standard')
     if mode not in ('Standard', 'Depth window'):
         raise ValueError('etch_mode must be Standard or Depth window')
