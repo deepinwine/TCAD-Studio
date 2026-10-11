@@ -44,7 +44,7 @@ def test_directionality_endpoints_and_validation(self):
 
 - [ ] 运行 `TCAD_SKIP_QT=1 MPLBACKEND=Agg /opt/anaconda3/bin/python3 -m unittest tests.test_depth_window_etch`，确认新增测试因解析行为不存在失败。
 - [ ] 新模块定义不可变 `WindowParams`、`ResolvedWindow`，实现 `parse_window_params(params)` 与 `resolve_window(model, parsed)`。内部新字段统一为上述英文键；固定 Z 使用 `lower_z_nm`、`upper_z_nm`。普通模式值为 `Standard`，新模式值为 `Depth window`。
-- [ ] 参考面由本步开始时开口内非空柱的最高实体上边界解析；冻结为一个值，范围用体素中心按半开区间选取。复用 domain 坐标，测试禁止半体素偏移或 µm／nm 混用。
+- [ ] 参考面遵循 2026-10-11 所有者确认的孔口顶面修正：取开口四邻接一格闭合区域中非空柱的最高实体上边界；不环绕 domain。全开口使用全域最高实体边界；局部开口没有非空孔沿则拒绝并提示固定 Z。多个／起伏孔口冻结同一个最高参考值；范围用体素中心半开区间选取。复用 domain 坐标，禁止半体素偏移或 µm／nm 混用。深孔 fixture：10 nm 网格，40 层实体、孔中仅余 10 层；孔口参考应为 395 nm 而非孔底 95 nm，深度 100–200 nm 对应 `[195,295)`。
 - [ ] 新 ParameterSpec 增量定义；默认普通模式保持 depth 与 angle 旧结果。参数检查只验证活动字段，模式改变保留非活动草稿但不执行其值。`directionality_percent` 默认 0，区间初值 100–200 nm、距离 30 nm；初值越出小模型域时明确报错，不静默夹紧。
 - [ ] 复跑解析测试、`tests.test_structure_cad`、`tests.test_structure_editor_http`、`tests.test_process_cad_foundation`；运行编译、diff check。小提交 `feat(刻蚀): 添加深度区间参数契约`，两阶段审查。
 
