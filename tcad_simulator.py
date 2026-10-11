@@ -5738,6 +5738,7 @@ class ParameterSpec:
     canonical_unit: Optional[str] = None
     display_units: Sequence[str] = ()
     capability_key: Optional[str] = None
+    active_when: Optional[Dict[str, Any]] = None
 
 
 def _format_optional_number(value: Optional[float]) -> str:
@@ -20537,11 +20538,26 @@ class StructureGeometryStep(ProcessStep):
         if self.operation != "Planarize":
             specs.append(ParameterSpec("material", "Material", "enum", "Silicon" if self.operation == "Wafer" else "Silicon Dioxide", choices=[(n, n) for n in self.material_db.names() if n != "Void"]))
         key = "depth_nm" if self.operation == "Etch" else "height_nm" if self.operation in {"Fill", "Planarize"} else "thickness_nm"
-        specs.append(ParameterSpec(key, "Depth" if key == "depth_nm" else "Absolute height" if key == "height_nm" else "Thickness", "float", 100.0, 0.0, None, units="nm", dimension="length", canonical_unit="nm", display_units=("nm", "µm")))
+        specs.append(ParameterSpec(key, "Depth" if key == "depth_nm" else "Absolute height" if key == "height_nm" else "Thickness", "float", 100.0, 0.0, None, units="nm", dimension="length", canonical_unit="nm", display_units=("nm", "µm"), active_when={"etch_mode": "Standard"} if self.operation == "Etch" else None))
         if self.operation == "Deposit":
             specs.append(ParameterSpec("coverage", "Coverage", "enum", "Full wafer", choices=[("Full wafer", "Full wafer"), ("Open mask", "Open mask")]))
         if self.operation == "Etch":
-            specs.append(ParameterSpec("sidewall_angle_deg", "Sidewall angle", "float", 90.0, 0.0, 90.0, units="°", dimension="angle", canonical_unit="degree", display_units=("°", "rad")))
+            specs.append(ParameterSpec("sidewall_angle_deg", "Sidewall angle", "float", 90.0, 0.0, 90.0, units="°", dimension="angle", canonical_unit="degree", display_units=("°", "rad"), active_when={"etch_mode": "Standard"}))
+            specs.append(ParameterSpec("etch_mode", "Etch mode", "enum", "Standard", choices=[(v, v) for v in ("Standard", "Depth window")]))
+            window = {"etch_mode": "Depth window"}
+            specs.append(ParameterSpec("depth_reference", "Depth reference", "enum", "Opening plane", choices=[(v, v) for v in ("Opening plane", "Fixed Z")], active_when=window))
+            for field, label, default, minimum, reference in (
+                ("start_depth_nm", "Start depth", 100.0, 0.0, "Opening plane"),
+                ("end_depth_nm", "End depth", 200.0, 0.0, "Opening plane"),
+                ("lower_z_nm", "Lower Z", 100.0, None, "Fixed Z"),
+                ("upper_z_nm", "Upper Z", 200.0, None, "Fixed Z"),
+                ("etch_distance_nm", "Etch distance", 30.0, 0.0, None),
+            ):
+                condition = dict(window)
+                if reference is not None:
+                    condition["depth_reference"] = reference
+                specs.append(ParameterSpec(field, label, "float", default, minimum, None, units="nm", dimension="length", canonical_unit="nm", display_units=("nm", "µm"), active_when=condition))
+            specs.append(ParameterSpec("directionality_percent", "Directionality", "float", 0.0, 0.0, 100.0, units="%", active_when=window))
         return tuple(specs)
 
     def execute(self, model: ProcessModel) -> str:
@@ -32661,7 +32677,7 @@ def _tcad_litdb_map_action_to_tcad_step(action: str, step_types: Sequence[str]) 
 
 
 def _webui_serialize_parameter_spec(spec: ParameterSpec) -> Dict[str, Any]:
-    return {
+    result = {
         "key": spec.key,
         "label": spec.label,
         "type": spec.type,
@@ -32678,6 +32694,9 @@ def _webui_serialize_parameter_spec(spec: ParameterSpec) -> Dict[str, Any]:
         "display_units": list(spec.display_units),
         "capability_key": spec.capability_key,
     }
+    if spec.active_when is not None:
+        result["active_when"] = dict(spec.active_when)
+    return result
 
 
 def _normalize_step_instance_name(value: Any, fallback: str) -> str:

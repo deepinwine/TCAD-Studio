@@ -29,6 +29,7 @@ class ParameterSpecView:
     canonical_unit: Optional[str] = None
     display_units: Optional[Sequence[str]] = None
     capability_key: Optional[str] = None
+    active_when: Optional[Mapping[str, Any]] = None
 
     def to_json(self) -> Dict[str, Any]:
         result = _compact({
@@ -47,6 +48,7 @@ class ParameterSpecView:
             "canonicalUnit": self.canonical_unit,
             "displayUnits": list(self.display_units) if self.display_units is not None else None,
             "capabilityKey": self.capability_key,
+            "activeWhen": dict(self.active_when) if self.active_when is not None else None,
         })
         # Null is semantic for optional numbers, not an absent display default.
         if self.type in ("float", "int", "integer") and self.default_value is None:

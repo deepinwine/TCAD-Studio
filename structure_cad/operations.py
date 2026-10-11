@@ -31,13 +31,17 @@ def preflight_candidate(step, model, supplied=None, *, mask_asset_service=None):
         count = layers(model, params['thickness_nm'], 'thickness_nm')
         if count > model.grid.shape[2]:
             raise ValueError('Structure thickness exceeds domain height')
-    elif operation in ('Etch', 'Doping'):
+    elif operation == 'Etch':
+        from structure_cad.depth_window_etch import parse_window_params
+        if parse_window_params(params).etch_mode == 'Standard':
+            layers(model, params['depth_nm'], 'depth_nm')
+    elif operation == 'Doping':
         layers(model, params['depth_nm'], 'depth_nm')
     elif operation in ('Fill', 'Planarize'):
         count = layers(model, params['height_nm'], 'height_nm', zero=True)
         if count > model.grid.shape[2]:
             raise ValueError('Structure height exceeds domain height')
-    if operation == 'Etch':
+    if operation == 'Etch' and params.get('etch_mode', 'Standard') == 'Standard':
         angle = number(params['sidewall_angle_deg'], 'sidewall_angle_deg')
         if angle > 90:
             raise ValueError('sidewall_angle_deg must be in (0, 90]')
@@ -176,6 +180,12 @@ def commit(model, candidate, operation, *, step_id=None, additions=None):
 
 def construct(model, operation, *, step_id=None, **params):
     top(model)
+    if operation == 'Etch':
+        from structure_cad.depth_window_etch import parse_window_params
+        parsed = parse_window_params(params)
+        if parsed.etch_mode == 'Depth window':
+            material_id(model, params['material'])
+            raise ValueError('Structure Etch Depth window is not available until geometry implementation')
     if operation == 'Doping':
         return dope(model, params)
     candidate = model.grid.copy()

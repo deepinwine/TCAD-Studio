@@ -261,8 +261,14 @@ class ProcessCadFacade:
                         parameter_path=str(key),
                         suggestion=f"可用参数：{sorted(specs)}",
                     )
-                self._validate_parameter(position, str(key), value, spec)
+                if step.name != "Structure Etch":
+                    self._validate_parameter(position, str(key), value, spec)
                 blob_params[str(key)] = value
+            if step.name == "Structure Etch":
+                from recipe_planner.schema import parameter_errors
+                errors = parameter_errors(step.name, blob_params, material_db=self._database)
+                if errors:
+                    raise ProcessCadError("; ".join(errors), code="invalid_parameter", step_index=position)
             if step.name == "Etch":
                 try:
                     self._tcad._prepare_etch_execution(blob_params, self._database)
@@ -612,6 +618,7 @@ class ProcessCadFacade:
                 canonical_unit=spec.canonical_unit,
                 display_units=spec.display_units,
                 capability_key=spec.capability_key,
+                active_when=spec.active_when,
             )
             for spec in raw_specs
         ]

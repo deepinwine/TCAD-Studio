@@ -15,7 +15,8 @@ def step_schema(material_db=None):
                        "choices": list(dict.fromkeys([choice[0] for choice in spec.choices or []] + ([spec.default] if spec.type == "enum" else []))),
                        "units": spec.units, "dimension": spec.dimension,
                        "canonical_unit": spec.canonical_unit, "display_units": list(spec.display_units),
-                       "capability_key": spec.capability_key}
+                       "capability_key": spec.capability_key,
+                       "active_when": spec.active_when}
             for spec in factory(db).parameter_specs()
         }
         for name, factory in tcad.PROCESS_STEP_FACTORIES.items()
@@ -63,6 +64,10 @@ def parameter_errors(name, params, schema=None, material_db=None):
             else:
                 errors.append(f"未知参数 {key}")
             continue
+        condition = spec.get("active_when")
+        if condition and any(params.get(controller, schema[name][controller]["default"]) != expected
+                             for controller, expected in condition.items()):
+            continue
         if spec["type"] in ("float", "int"):
             if value is None and spec["default"] is None:
                 continue
@@ -98,6 +103,12 @@ def parameter_errors(name, params, schema=None, material_db=None):
                     ratio = pair.get("ratio")
                     if isinstance(ratio, bool) or not isinstance(ratio, Real) or not math.isfinite(ratio) or ratio < 0:
                         errors.append(f"参数 {key} 的 ratio 必须是有限非负数")
+    if name == "Structure Etch":
+        from structure_cad.depth_window_etch import parse_window_params
+        try:
+            parse_window_params(params)
+        except ValueError as exc:
+            errors.append(str(exc))
     if name == "Etch":
         import tcad_simulator as tcad
         try:
