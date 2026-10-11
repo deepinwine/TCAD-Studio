@@ -56,8 +56,11 @@ def test_directionality_endpoints_and_validation(self):
 
 ```python
 before = model.grid.copy()
-candidate = window_etch_candidate(model, resolve_window(model, parsed))
-outside = ~resolved.band_mask
+resolved = resolve_window(model, parsed)
+candidate = window_etch_candidate(model, resolved)
+band = np.zeros(model.grid.shape[2], dtype=bool)
+band[list(resolved.z_indices)] = True
+outside = np.broadcast_to(~band[None, None, :], model.grid.shape)
 np.testing.assert_array_equal(candidate[outside], before[outside])
 np.testing.assert_array_equal(candidate[before != target_id], before[before != target_id])
 np.testing.assert_array_equal(model.grid, before)
@@ -66,9 +69,11 @@ np.testing.assert_array_equal(model.grid, before)
 这里 `parsed`、`resolved`、`target_id` 来自同一 fixture 的解析结果；测试实际代码使用同一个 `resolved` 调用候选函数，不重复解析移动参考面。
 
 - [ ] 跑测试确认红灯，最小实现 `accessible_surface(model, resolved)` 与 `window_etch_candidate(model, resolved)`。返回完整候选 grid，不原地写模型。用既有空气和掩膜确定入口连通域；通过非目标材料不能取得新的种子。
+- [ ] 遵循 2026-10-11 所有者确认的接触面起算规则：冻结可达空气与目标体素之间的真实轴对齐面片及其高度带内部分。测试 10 nm 网格、30 nm 距离删除法向中心 5／15／25 nm、保留 35 nm；100% 竖壁不横向削一层。扩展作用于整个面片，不采用材料中心 seed 或简单 EDT 距离减半格。
 - [ ] 按规格的球加 -Z 线段扩展实现有界计算：球半径 `(1-a)*r`、线段长 `a*r`。测试 0、50、100 的向下／横向／向上距离、共同边界及网格精度容差；0 的球形和 100 的纯 -Z 不可共用标签却共用同一结果。
 - [ ] 目标删除集合还要满足种子连通和高度带约束。不能跨阻挡层跳删同材；不能重设种子反复膨胀超出整步距离。验证距离增大不减少合法删材，增大方向性不扩大横向最大范围。
-- [ ] 工作数组预算检查在分配前；不创建体素两两距离矩阵，也不生成与距离立方成比例的无界核。若现有 SciPy 距离／连通算子不能符合冻结面中心及阻挡规则，先上报具体偏差，不自行改批准的几何定义。
+- [ ] 工作数组预算检查在分配前，包括 `resolve_window` 的 `heights()` 全域临时数组；不创建体素两两距离矩阵，也不生成与距离立方成比例的无界核。若现有 SciPy 距离／连通算子不能符合冻结接触面及阻挡规则，先上报具体偏差，不自行改批准的几何定义。
+- [ ] 有界精确实现可按原始 Z 层和面方向分组：二维半格格点覆盖面片 XY 投影，EDT 后在目标中心采样；纵向计算到沿 -Z 扫掠后的连续区间距离。仅分配一个二维半格平面，不构建三维倍格；预检平面内存、体素工作数组与逐层访问总预算。非整格 `a*r` 不取整，增加解析参考面的逐面解析 oracle 测试。
 - [ ] 先让候选测试通过，再在 `operations.construct` 分流并复用 `commit(..., additions=None)`；新增直接调用与 execute 事务测试，删材 owner 清零，其他 owner 不变，无变化明确失败。
 - [ ] 复跑新测试、来源测试及 Structure 相关测试，编译、grid128；小提交 `feat(刻蚀): 实现受限深度区间几何去除`，两阶段审查。
 
