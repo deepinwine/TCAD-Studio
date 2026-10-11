@@ -181,11 +181,12 @@ def commit(model, candidate, operation, *, step_id=None, additions=None):
 def construct(model, operation, *, step_id=None, **params):
     top(model)
     if operation == 'Etch':
-        from structure_cad.depth_window_etch import parse_window_params
+        from structure_cad.depth_window_etch import parse_window_params, resolve_window, window_etch_candidate
         parsed = parse_window_params(params)
         if parsed.etch_mode == 'Depth window':
-            material_id(model, params['material'])
-            raise ValueError('Structure Etch Depth window is not available until geometry implementation')
+            resolved = resolve_window(model, parsed)
+            candidate = window_etch_candidate(model, resolved)
+            return commit(model, candidate, 'Structure Etch Depth window', step_id=step_id, additions=None)
     if operation == 'Doping':
         return dope(model, params)
     candidate = model.grid.copy()

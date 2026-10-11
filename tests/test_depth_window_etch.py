@@ -1,5 +1,7 @@
 """Structure Etch configuration and frozen, center-sampled height bands."""
 import importlib
+from collections import deque
+from types import SimpleNamespace
 import unittest
 from dataclasses import FrozenInstanceError
 from unittest import mock
@@ -8,6 +10,487 @@ import numpy as np
 import tcad_simulator as tcad
 from recipe_planner.schema import parameter_errors, step_schema
 from structure_cad.operations import preflight_candidate
+
+
+def face_oracle(model, resolved):
+    """Small-fixture oracle: BFS air, enumerate real rectangles, clamp each point.
+
+    Deliberately uses neither EDT nor production face masks/projection helpers.
+    """
+    grid, voxel = model.grid, model.voxel_size_nm
+    shape = grid.shape
+    directions = [(axis, sign) for axis in range(3) for sign in (-1, 1)]
+
+    def neighbors(point):
+        for axis, sign in directions:
+            q = list(point)
+            q[axis] += sign
+            if 0 <= q[axis] < shape[axis]:
+                yield tuple(q)
+
+    air = set((x, y, shape[2]-1) for x, y in np.ndindex(shape[:2])
+              if model.open_mask[x, y] and grid[x, y, -1] == 0)
+    queue = deque(air)
+    while queue:
+        for q in neighbors(queue.popleft()):
+            if grid[q] == 0 and q not in air:
+                air.add(q)
+                queue.append(q)
+    faces = []
+    for point in np.ndindex(shape):
+        if grid[point] != resolved.target_id:
+            continue
+        for axis, sign in directions:
+            q = list(point)
+            q[axis] += sign
+            exterior_top = axis == 2 and sign == 1 and q[2] == shape[2] and model.open_mask[point[:2]]
+            if tuple(q) not in air and not exterior_top:
+                continue
+            lo = [(i-.5)*voxel for i in point]
+            hi = [(i+.5)*voxel for i in point]
+            lo[axis] = hi[axis] = (point[axis]+sign*.5)*voxel
+            if axis == 2:
+                if not resolved.lower_z_nm <= lo[2] < resolved.upper_z_nm:
+                    continue
+            else:
+                lo[2] = max(lo[2], resolved.lower_z_nm)
+                hi[2] = min(hi[2], resolved.upper_z_nm)
+                if lo[2] >= hi[2]:
+                    continue
+            lo[2] -= resolved.directionality * resolved.etch_distance_nm
+            faces.append((lo, hi))
+    radius = (1-resolved.directionality)*resolved.etch_distance_nm
+    eligible = set()
+    for point in np.ndindex(shape):
+        if grid[point] != resolved.target_id or point[2] not in resolved.z_indices:
+            continue
+        center = [i*voxel for i in point]
+        if any(sum(max(low-value, value-high, 0)**2 for value, low, high in zip(center, lo, hi))
+               <= radius**2 + 1e-10 for lo, hi in faces):
+            eligible.add(point)
+    reached = set(air)
+    reached.update(p for p in eligible if p[2] == shape[2]-1 and model.open_mask[p[:2]])
+    queue = deque(reached)
+    while queue:
+        for q in neighbors(queue.popleft()):
+            if q in eligible and q not in reached:
+                reached.add(q)
+                queue.append(q)
+    expected = grid.copy()
+    for p in eligible & reached:
+        expected[p] = 0
+    return expected, faces
+
+
+class DepthWindowGeometryTests(unittest.TestCase):
+    def setUp(self):
+        self.api = importlib.import_module('structure_cad.depth_window_etch')
+        self.db = tcad.MaterialDatabase()
+        self.si = self.db.id_for('Silicon')
+        self.cu = self.db.id_for('Copper')
+
+    def model(self, shape=(9, 9, 12), voxel=10):
+        model = tcad.ProcessModel(self.db, grid_shape=shape, voxel_size_nm=voxel, max_workers=1)
+        self.addCleanup(model.parallel.shutdown)
+        model.grid.fill(0)
+        model.open_mask.fill(False)
+        return model
+
+    def resolved(self, model, **overrides):
+        params = dict(etch_mode='Depth window', material='Silicon', depth_reference='Fixed Z',
+                      lower_z_nm=20, upper_z_nm=70, etch_distance_nm=30,
+                      directionality_percent=0)
+        params.update(overrides)
+        resolved = self.api.resolve_window(model, self.api.parse_window_params(params))
+        self.assertTrue(hasattr(resolved, 'target_id'), 'Resolved target material must be frozen')
+        return resolved
+
+    def candidate(self, model, resolved):
+        method = getattr(self.api, 'window_etch_candidate', None)
+        self.assertTrue(callable(method), 'Real contact-face candidate geometry is missing')
+        return method(model, resolved)
+
+    def channel(self, shape=(9, 9, 12)):
+        model = self.model(shape)
+        model.grid[:, :, :10] = self.si
+        model.grid[4, 4, 2:] = 0
+        model.open_mask[4, 4] = True
+        return model
+
+    def assert_oracle(self, model, resolved):
+        before = model.grid.copy()
+        expected, faces = face_oracle(model, resolved)
+        self.assertTrue(faces)
+        if not np.any(expected != before):
+            with self.assertRaisesRegex(ValueError, 'no geometry changed|no effective deletion'):
+                self.candidate(model, resolved)
+            np.testing.assert_array_equal(model.grid, before)
+            return expected
+        actual = self.candidate(model, resolved)
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(model.grid, before)
+        self.assertFalse(np.shares_memory(actual, model.grid))
+        return actual
+
+    def test_contact_face_30nm_deletes_three_layers_not_four(self):
+        model = self.channel((11, 9, 12))
+        resolved = self.resolved(model)
+        actual = self.assert_oracle(model, resolved)
+        # Wall face at x=45 nm: centers x=50/60/70 removed, x=80 retained.
+        np.testing.assert_array_equal(actual[5:8, 4, 4], 0)
+        self.assertEqual(actual[8, 4, 4], self.si)
+        np.testing.assert_array_equal(actual[:, :, :2], model.grid[:, :, :2])
+        np.testing.assert_array_equal(actual[:, :, 7:], model.grid[:, :, 7:])
+
+    def test_pure_z_from_vertical_walls_is_no_change(self):
+        model = self.channel()
+        resolved = self.resolved(model, directionality_percent=100)
+        _, faces = face_oracle(model, resolved)
+        self.assertTrue(faces)
+        before = model.grid.copy()
+        with self.assertRaisesRegex(ValueError, 'no geometry changed|no effective deletion'):
+            self.candidate(model, resolved)
+        np.testing.assert_array_equal(model.grid, before)
+
+    def test_directionality_sweeps_real_floor_and_wall_patches(self):
+        model = self.channel()
+        candidates = []
+        for percent in (0, 50, 100):
+            resolved = self.resolved(model, lower_z_nm=-5, upper_z_nm=75,
+                                     directionality_percent=percent)
+            candidates.append(self.assert_oracle(model, resolved))
+        self.assertFalse(np.array_equal(candidates[0], candidates[2]))
+        self.assertEqual(candidates[2][4, 4, 0], 0)
+        self.assertEqual(candidates[2][5, 4, 4], self.si)
+        self.assertEqual(candidates[1][6, 4, 4], 0)  # 15 nm sphere radius.
+        self.assertEqual(candidates[1][7, 4, 4], self.si)
+
+    def test_all_face_orientations_noninteger_distance_and_fractional_band_clip(self):
+        model = self.model((7, 7, 9))
+        model.grid[:, :, :7] = self.si
+        # Inlet joins a chamber exposing floors, ceilings and four wall directions.
+        model.grid[3, 3, 3:] = 0
+        model.grid[2:5, 2:5, 3:5] = 0
+        model.open_mask[3, 3] = True
+        for percent in (0, 17, 50, 83, 100):
+            for lower, upper in ((12.3, 58.7), (34.2, 46.1)):
+                resolved = self.resolved(model, lower_z_nm=lower, upper_z_nm=upper,
+                                         etch_distance_nm=23.7, directionality_percent=percent)
+                self.assert_oracle(model, resolved)
+
+    def test_rectangular_circular_multiple_inlets_and_nonflat_surface(self):
+        model = self.model((11, 11, 12))
+        for x, y in np.ndindex(model.grid.shape[:2]):
+            model.grid[x, y, :8 + (x+y) % 3] = self.si
+        xx, yy = np.indices(model.open_mask.shape)
+        opened = ((xx-3)**2 + (yy-3)**2 <= 2) | ((xx >= 7) & (xx <= 8) & (yy >= 6) & (yy <= 8))
+        model.open_mask[:] = opened
+        model.grid[opened, 2:] = 0
+        for percent in (0, 50, 100):
+            resolved = self.resolved(model, lower_z_nm=-5, upper_z_nm=65,
+                                     etch_distance_nm=17.3, directionality_percent=percent)
+            self.assert_oracle(model, resolved)
+
+    def test_air_inlet_cannot_start_at_side_or_closed_cavity(self):
+        model = self.model((7, 7, 9))
+        model.grid.fill(self.cu)
+        model.grid[3, 3, 7:] = 0
+        model.open_mask[3, 3] = True
+        model.grid[0, 1:3, 2:4] = 0  # side-only void, disconnected from inlet.
+        model.grid[1, 1:3, 2:4] = self.si
+        model.grid[4, 4, 3] = 0  # sealed cavity.
+        model.grid[4, 5, 3] = self.si
+        with self.assertRaisesRegex(ValueError, 'surface|channel|target'):
+            self.candidate(model, self.resolved(model))
+
+    def test_no_channel_no_target_and_top_mask_only(self):
+        for case in ('buried', 'absent', 'wrong inlet'):
+            model = self.model((7, 7, 9))
+            model.grid[:, :, :7] = self.si if case != 'absent' else self.cu
+            model.open_mask[3, 3] = True
+            if case == 'wrong inlet':
+                model.grid[:, :, 7:] = self.cu
+                model.grid[1, 1, 2:] = 0
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, 'surface|channel|target'):
+                self.candidate(model, self.resolved(model, upper_z_nm=55))
+
+    def test_other_material_blocks_isolated_same_material_and_does_not_change(self):
+        model = self.model((9, 9, 9))
+        model.grid.fill(self.cu)
+        model.grid[2, 4, 2:] = 0
+        model.open_mask[2, 4] = True
+        model.grid[3, 4, 2:7] = self.si
+        model.grid[5, 4, 2:7] = self.si  # within 30nm, across copper barrier.
+        # Same-material detour below the band must not bypass that barrier.
+        model.grid[3:6, 4, 1] = self.si
+        resolved = self.resolved(model, etch_distance_nm=35)
+        actual = self.assert_oracle(model, resolved)
+        np.testing.assert_array_equal(actual[3, 4, 2:7], 0)
+        np.testing.assert_array_equal(actual[5, 4, 2:7], self.si)
+        np.testing.assert_array_equal(actual[:, :, :2], model.grid[:, :, :2])
+        np.testing.assert_array_equal(actual[model.grid == self.cu], self.cu)
+
+    def test_distance_monotonicity_and_directionality_lateral_extent(self):
+        model = self.channel((11, 9, 12))
+        deletions = []
+        for distance in (10, 20, 30):
+            candidate = self.candidate(model, self.resolved(model, etch_distance_nm=distance))
+            deletions.append((candidate == 0) & (model.grid == self.si))
+        self.assertTrue(np.all(~deletions[0] | deletions[1]))
+        self.assertTrue(np.all(~deletions[1] | deletions[2]))
+        extents = []
+        for percent in (0, 50, 100):
+            candidate = self.assert_oracle(model, self.resolved(model, lower_z_nm=-5, upper_z_nm=75,
+                                                               directionality_percent=percent))
+            x, y, _ = np.nonzero((candidate == 0) & (model.grid == self.si))
+            extents.append(max(np.max(abs(x-4)), np.max(abs(y-4))))
+        self.assertEqual(extents, [3, 2, 0])
+
+    def test_surfaces_and_target_are_frozen_and_arrays_readonly(self):
+        model = self.channel()
+        method = getattr(self.api, 'accessible_surface', None)
+        self.assertTrue(callable(method), 'Accessible contact-face seeds are missing')
+        resolved = self.resolved(model)
+        self.assertEqual(resolved.target_id, self.si)
+        surface = method(model, resolved)
+        self.assertTrue(any(face.any() for face in surface.faces))
+        for array in (*surface.faces, surface.reachable_air, surface.open_mask):
+            self.assertFalse(array.flags.writeable)
+            saved = array.copy()
+            model.grid.fill(self.cu)
+            model.open_mask.fill(True)
+            np.testing.assert_array_equal(array, saved)
+
+    def test_default_and_numeric_material_use_existing_registry_contract(self):
+        model = self.channel()
+        for value in ('Silicon', self.si, np.int64(self.si)):
+            resolved = self.resolved(model, material=value)
+            self.assertEqual(resolved.target_id, self.si)
+        parsed = self.api.parse_window_params(dict(etch_mode='Depth window', depth_reference='Fixed Z',
+                                                  lower_z_nm=20, upper_z_nm=70))
+        resolved = self.api.resolve_window(model, parsed)
+        self.assertTrue(hasattr(resolved, 'target_id'), 'Resolved target material must be frozen')
+        self.assertEqual(resolved.target_id, self.db.id_for('Silicon Dioxide'))
+
+    def test_budgets_reject_before_resolve_heights_or_candidate_allocations(self):
+        self.assertTrue(hasattr(self.api, 'MAX_WORK_BYTES'), 'Preallocation workspace budget is missing')
+        model = self.channel()
+        resolved = self.resolved(model)
+        parsed = self.api.parse_window_params(dict(etch_mode='Depth window', material='Silicon',
+                                                  start_depth_nm=10, end_depth_nm=30))
+        with mock.patch.object(self.api, 'MAX_WORK_BYTES', 1), \
+                mock.patch('structure_cad.operations.heights', side_effect=AssertionError('allocated occupied')), \
+                mock.patch.object(self.api.np, 'zeros', side_effect=AssertionError('allocated volume')):
+            with self.assertRaisesRegex(ValueError, 'budget'):
+                self.api.resolve_window(model, parsed)
+            with self.assertRaisesRegex(ValueError, 'budget'):
+                self.candidate(model, resolved)
+        with mock.patch.object(self.api, 'MAX_WORK_VISITS', 1):
+            with self.assertRaisesRegex(ValueError, 'budget'):
+                self.api.resolve_window(model, parsed)
+        with self.assertRaisesRegex(ValueError, 'distance|budget'):
+            self.resolved(model, etch_distance_nm=1e300)
+
+    def test_grid128_default_geometry_budget_is_accepted(self):
+        model = self.model((128, 128, 128), voxel=5)
+        model.grid[:, :, :100] = self.si
+        model.grid[64, 64, 20:] = 0
+        model.open_mask[64, 64] = True
+        resolved = self.resolved(model, lower_z_nm=250, upper_z_nm=350)
+        actual = self.candidate(model, resolved)
+        self.assertTrue(np.any(actual != model.grid))
+        self.assertEqual(actual[71, 64, 60], self.si)  # 32.5nm from contact face.
+        self.assertEqual(actual[70, 64, 60], 0)  # 27.5nm, within r=30nm.
+
+    def prepared_commit(self):
+        model = self.model()
+        for factory, thickness in ((tcad.StructureWaferStep, 50), (tcad.StructureDepositStep, 50)):
+            step = factory(self.db)
+            step.params.update(material='Silicon', thickness_nm=thickness)
+            step.execute(model)
+        model.grid[4, 4, 2:] = 0
+        model.display_provenance.owners[model.grid == 0] = 0
+        model._rebuild_height_map(preserve_display=True)
+        model.open_mask.fill(False)
+        model.open_mask[4, 4] = True
+        model.doping = np.full(model.grid.shape, 7, dtype=np.float32)
+        model.active_dopants = np.full(model.grid.shape, 3, dtype=np.float32)
+        model.dopant_species_fields['B'] = np.full(model.grid.shape, 2, dtype=np.float32)
+        etch = tcad.StructureEtchStep(self.db)
+        etch.params.update(etch_mode='Depth window', material='Silicon', depth_reference='Fixed Z',
+                           lower_z_nm=20, upper_z_nm=70, etch_distance_nm=30, directionality_percent=0)
+        return model, etch
+
+    def saved_state(self, model):
+        return ({name: getattr(model, name).copy() for name in ('grid', 'height_map', 'open_mask',
+                                                               'doping', 'active_dopants')},
+                model.dopant_species_fields['B'].copy(), model.display_provenance.owners.copy(),
+                dict(model.display_provenance.step_ids))
+
+    def assert_saved_state(self, model, saved):
+        arrays, species, owners, identities = saved
+        for name, array in arrays.items():
+            np.testing.assert_array_equal(getattr(model, name), array)
+        np.testing.assert_array_equal(model.dopant_species_fields['B'], species)
+        np.testing.assert_array_equal(model.display_provenance.owners, owners)
+        self.assertEqual(model.display_provenance.step_ids, identities)
+
+    def test_construct_and_execute_commit_only_deleted_fields_and_owners(self):
+        from structure_cad.operations import construct
+        for direct in (True, False):
+            model, step = self.prepared_commit()
+            saved = self.saved_state(model)
+            resolved = self.api.resolve_window(model, self.api.parse_window_params(step.params))
+            expected, _ = face_oracle(model, resolved)
+            deleted = expected != model.grid
+            with self.subTest(direct=direct):
+                if direct:
+                    self.assertEqual(construct(model, 'Etch', step_id=step.step_id, **step.params), int(deleted.sum()))
+                else:
+                    self.assertIn(str(int(deleted.sum())), step.execute(model))
+                np.testing.assert_array_equal(model.grid, expected)
+                for name in ('doping', 'active_dopants'):
+                    self.assertFalse(getattr(model, name)[deleted].any())
+                    np.testing.assert_array_equal(getattr(model, name)[~deleted], saved[0][name][~deleted])
+                self.assertFalse(model.dopant_species_fields['B'][deleted].any())
+                np.testing.assert_array_equal(model.dopant_species_fields['B'][~deleted], saved[1][~deleted])
+                self.assertFalse(model.display_provenance.owners[deleted].any())
+                np.testing.assert_array_equal(model.display_provenance.owners[~deleted], saved[2][~deleted])
+                self.assertEqual(model.display_provenance.step_ids, saved[3])
+                self.assertEqual(model.display_provenance.owner_for(step.step_id), 0)
+                np.testing.assert_array_equal(model.open_mask, saved[0]['open_mask'])
+                self.assertEqual(model.current_time_s, 0)
+
+    def test_direct_and_execute_readonly_source_and_spatial_failures_are_atomic(self):
+        from structure_cad.operations import construct
+        for direct in (True, False):
+            for readonly in ('grid', 'doping', 'species', 'owners', 'source shape'):
+                model, step = self.prepared_commit()
+                if readonly == 'species':
+                    model.dopant_species_fields['B'].flags.writeable = False
+                elif readonly == 'owners':
+                    model.display_provenance.owners.flags.writeable = False
+                elif readonly == 'source shape':
+                    model.display_provenance.owners = model.display_provenance.owners[:, :, :-1].copy()
+                else:
+                    getattr(model, readonly).flags.writeable = False
+                saved = self.saved_state(model)
+                with self.subTest(direct=direct, readonly=readonly), self.assertRaisesRegex(ValueError, 'writable|owners'):
+                    if direct:
+                        construct(model, 'Etch', step_id=step.step_id, **step.params)
+                    else:
+                        step.execute(model)
+                self.assert_saved_state(model, saved)
+
+    def test_no_change_budget_and_no_surface_fail_without_partial_publish(self):
+        model, step = self.prepared_commit()
+        for case in ('directional wall', 'budget', 'no surface'):
+            step.params.update(lower_z_nm=20, upper_z_nm=70, directionality_percent=0,
+                               etch_distance_nm=30)
+            if case == 'directional wall':
+                step.params['directionality_percent'] = 100
+            elif case == 'budget':
+                step.params['etch_distance_nm'] = 1e300
+            else:
+                step.params.update(lower_z_nm=0, upper_z_nm=5)
+            saved = self.saved_state(model)
+            with self.subTest(case=case), self.assertRaisesRegex(ValueError, 'deletion|distance|budget|surface'):
+                step.execute(model)
+            self.assert_saved_state(model, saved)
+
+    def test_approved_deep_hole_opening_plane_and_fixed_z_produce_same_candidate(self):
+        model = self.model((11, 11, 50))
+        model.grid[:, :, :40] = self.si
+        model.grid[5, 5, 10:] = 0
+        model.open_mask[5, 5] = True
+        before = model.grid.copy()
+        results = []
+        for percent in (0, 50, 100):
+            opening = self.resolved(model, depth_reference='Opening plane', start_depth_nm=100,
+                                    end_depth_nm=200, directionality_percent=percent)
+            fixed = self.resolved(model, lower_z_nm=195, upper_z_nm=295,
+                                  directionality_percent=percent)
+            self.assertEqual((opening.reference_z_nm, opening.z_indices), (395, tuple(range(20, 30))))
+            if percent == 100:
+                for resolved in (opening, fixed):
+                    with self.assertRaisesRegex(ValueError, 'no effective deletion'):
+                        self.candidate(model, resolved)
+                continue
+            a = self.assert_oracle(model, opening)
+            b = self.candidate(model, fixed)
+            np.testing.assert_array_equal(a, b)
+            np.testing.assert_array_equal(a[:, :, :20], before[:, :, :20])
+            np.testing.assert_array_equal(a[:, :, 30:], before[:, :, 30:])
+            results.append(a)
+        self.assertFalse(np.array_equal(*results))
+        np.testing.assert_array_equal(model.grid, before)
+
+    def test_large_domain_budget_rejects_without_reading_or_allocating_grid(self):
+        model = self.model()
+        parsed = self.api.parse_window_params(dict(etch_mode='Depth window', material='Silicon'))
+        model.grid = SimpleNamespace(shape=(512, 512, 512), dtype=np.dtype(np.uint16))
+        with mock.patch.object(self.api.np, 'asarray', side_effect=AssertionError('read volume')), \
+                mock.patch.object(self.api.np, 'zeros', side_effect=AssertionError('allocated volume')):
+            with self.assertRaisesRegex(ValueError, 'memory budget'):
+                self.api.resolve_window(model, parsed)
+
+    def test_band_upper_face_excluded_and_original_faces_do_not_move(self):
+        model = self.model((7, 7, 9))
+        model.grid[:, :, :5] = self.si
+        model.open_mask[3, 3] = True
+        # Surface plane z=45 is exactly the excluded upper bound.
+        with self.assertRaisesRegex(ValueError, 'surface'):
+            self.candidate(model, self.resolved(model, lower_z_nm=15, upper_z_nm=45))
+        # Include the original plane. r=13 consumes one center (5nm), not the
+        # next (15nm); newly exposed faces never receive another distance budget.
+        resolved = self.resolved(model, lower_z_nm=15, upper_z_nm=45.1,
+                                 etch_distance_nm=13, directionality_percent=100)
+        actual = self.assert_oracle(model, resolved)
+        self.assertEqual(actual[3, 3, 4], 0)
+        self.assertEqual(actual[3, 3, 3], self.si)
+
+    def test_seed_projection_round_corners_and_reachability_match_random_voxels(self):
+        rng = np.random.default_rng(710)
+        for case in range(8):
+            model = self.model((5, 6, 7), voxel=7)
+            model.grid[:] = rng.choice([0, self.si, self.cu], size=model.grid.shape,
+                                       p=[.30, .50, .20])
+            model.open_mask[:] = rng.random(model.open_mask.shape) > .6
+            model.open_mask[2, 3] = True
+            model.grid[2, 3, 2:] = 0
+            model.grid[2, 3, 1] = self.si
+            resolved = self.resolved(model, lower_z_nm=2.2, upper_z_nm=33.1,
+                                     etch_distance_nm=11.3+case*.4, directionality_percent=case*13)
+            with self.subTest(case=case):
+                self.assert_oracle(model, resolved)
+
+    def test_analytic_downward_radius_and_upward_directionality_limits(self):
+        floor = self.model((7, 7, 12))
+        floor.grid.fill(self.cu)
+        floor.grid[3, 3, :6] = self.si
+        floor.grid[3, 3, 6:] = 0
+        floor.open_mask[3, 3] = True
+        # A floor face at 55nm has max downward displacement r for every a.
+        for percent in (0, 50, 100):
+            resolved = self.resolved(floor, lower_z_nm=-5, upper_z_nm=60,
+                                     directionality_percent=percent)
+            actual = self.assert_oracle(floor, resolved)
+            np.testing.assert_array_equal(actual[3, 3, 3:6], 0)  # 5/15/25nm.
+            self.assertEqual(actual[3, 3, 2], self.si)  # 35nm.
+
+        ceiling = self.model((7, 7, 12))
+        ceiling.grid.fill(self.cu)
+        ceiling.grid[1, 3, 3:] = 0
+        ceiling.grid[1:4, 3, 3:5] = 0
+        ceiling.grid[3, 3, 5:10] = self.si
+        ceiling.open_mask[1, 3] = True
+        # Only the lower horizontal face of the ceiling is accessible (z=45).
+        for percent, count in ((0, 3), (50, 2), (100, 0)):
+            resolved = self.resolved(ceiling, lower_z_nm=0, upper_z_nm=105,
+                                     directionality_percent=percent)
+            actual = self.assert_oracle(ceiling, resolved)
+            np.testing.assert_array_equal(actual[3, 3, 5:5+count], 0)
+            np.testing.assert_array_equal(actual[3, 3, 5+count:10], self.si)
 
 
 class DepthWindowEtchTests(unittest.TestCase):
@@ -181,13 +664,13 @@ class DepthWindowEtchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Fixed Z'):
             self.api.resolve_window(self.model, self.parse(start_depth_nm=0, end_depth_nm=20))
 
-    def test_preflight_does_not_resolve_final_geometry_and_execute_is_guarded(self):
+    def test_preflight_does_not_resolve_final_geometry_and_execute_rejects_empty_rim(self):
         step = tcad.StructureEtchStep(self.db)
         self.model.grid.fill(0)
         with mock.patch.object(self.api, 'resolve_window', side_effect=AssertionError('final geometry')):
             preflight_candidate(step, self.model, {'etch_mode': 'Depth window'})
         before = self.model.grid.copy()
-        with self.assertRaisesRegex(ValueError, 'not available until geometry implementation'):
+        with self.assertRaisesRegex(ValueError, 'nonempty opening rim'):
             step.execute(self.model)
         np.testing.assert_array_equal(before, self.model.grid)
         step.params['etch_distance_nm'] = True
