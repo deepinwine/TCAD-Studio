@@ -71,7 +71,9 @@ def precheck_budget(model, window):
     if required > MAX_WORK_BYTES:
         raise ValueError('Structure Etch Depth window exceeds workspace memory budget')
     span = min(nz, int(math.ceil((2-a)*scaled)) + 3)
-    visits = 3*nz*plane + 3*count*span
+    # Each bounded Z visit has one scalar distance check in addition to its
+    # nx*ny plane comparisons. Count both, even for long, thin domains.
+    visits = 3*nz*plane + 3*nz*span*(nx*ny+1)
     if visits > MAX_WORK_VISITS:
         raise ValueError('Structure Etch Depth window exceeds distance work budget')
 
@@ -266,6 +268,7 @@ def window_etch_candidate(model, resolved):
     # Use voxel units to avoid squaring unbounded physical coordinates.
     radius2 = (radius/voxel)**2
     tolerance = 16*np.finfo(float).eps*max(1, radius2)
+    z_radius = math.sqrt(radius2+tolerance)
     for k in range(model.grid.shape[2]):
         for group in range(3):
             if group < 2:
@@ -284,7 +287,12 @@ def window_etch_candidate(model, resolved):
             upper /= voxel
             xy = distance_transform_edt(~projected, sampling=.5)[1::2, 1::2]
             xy2 = np.square(xy)
-            for z in resolved.z_indices:
+            # z_indices is the frozen contiguous center band. Intersect integer
+            # bounds directly; scanning/filtering the whole tuple is quadratic
+            # on thin, tall domains even when almost every distance is rejected.
+            first = max(resolved.z_indices[0], math.ceil(math.nextafter(lower-z_radius, -math.inf)))
+            last = min(resolved.z_indices[-1], math.floor(math.nextafter(upper+z_radius, math.inf)))
+            for z in range(first, last+1):
                 dz = max(lower-z, z-upper, 0)
                 if dz*dz <= radius2 + tolerance:
                     selected[:, :, z] |= xy2 <= radius2-dz*dz+tolerance

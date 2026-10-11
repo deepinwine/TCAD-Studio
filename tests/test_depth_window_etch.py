@@ -492,6 +492,46 @@ class DepthWindowGeometryTests(unittest.TestCase):
             np.testing.assert_array_equal(actual[3, 3, 5:5+count], 0)
             np.testing.assert_array_equal(actual[3, 3, 5+count:10], self.si)
 
+    def test_long_thin_domain_z_visits_are_bounded_before_distance_filtering(self):
+        model = self.model((2, 1, 300), voxel=1)
+        model.grid[0, 0, :] = self.si
+        model.open_mask[1, 0] = True
+        resolved = self.resolved(model, lower_z_nm=-.5, upper_z_nm=299.5,
+                                 etch_distance_nm=.75)
+        visits = 0
+
+        def counted_max(*args, **kwargs):
+            nonlocal visits
+            if len(args) == 3:
+                visits += 1  # Every scalar dz evaluation, before the radius test.
+            return max(*args, **kwargs)
+
+        with mock.patch.object(self.api, 'max', counted_max, create=True):
+            actual = self.candidate(model, resolved)
+        self.assertFalse(actual.any())
+        # One vertical patch per source layer can reach at most three centers.
+        self.assertLessEqual(visits, 3*300)
+
+    def test_noninteger_sweep_z_endpoints_match_full_face_oracle(self):
+        model = self.model((2, 1, 40), voxel=1)
+        model.grid[0, 0, :] = self.si
+        model.open_mask[1, 0] = True
+        for distance, percent in ((.5000000000000001, 0), (.75, 17), (1.37, 50), (1.9, 73)):
+            resolved = self.resolved(model, lower_z_nm=7.125, upper_z_nm=31.875,
+                                     etch_distance_nm=distance, directionality_percent=percent)
+            self.assert_oracle(model, resolved)
+        floor = self.model((3, 3, 12), voxel=1)
+        floor.grid.fill(self.cu)
+        floor.grid[1, 1, :6] = self.si
+        floor.grid[1, 1, 6:] = 0
+        floor.open_mask[1, 1] = True
+        # R=0 still uses the original squared-distance roundoff tolerance:
+        # a center at 5 is at the lower endpoint of the 5.5 face swept by .5.
+        for distance in (np.nextafter(.5, 0), .5, np.nextafter(.5, 1), 1.3):
+            resolved = self.resolved(floor, lower_z_nm=2.125, upper_z_nm=6.875,
+                                     etch_distance_nm=distance, directionality_percent=100)
+            self.assert_oracle(floor, resolved)
+
 
 class DepthWindowEtchTests(unittest.TestCase):
     def setUp(self):
