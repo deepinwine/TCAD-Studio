@@ -147,6 +147,15 @@ Fast/voxel 声明 `etch.target_depth=estimated`、`etch.sidewall_angle=approxima
 optional 数值的默认值与未设置参数保留 JSON `null`。旧响应缺少加法元数据时，React 仍按 `units` 静态显示，
 不猜测能力或换算。M4 视图仅将上述字段名映射为 camelCase，不改变物理含义。
 
+条件参数元数据：M2 的 `active_when` 与 M4 的 `activeWhen` 是控制参数到预期值的映射，
+所有条件同时满足（AND）时该字段才活动；省略的控制参数使用工厂 `ParameterSpec.default`。
+例如 Structure Etch 的 `start_depth_nm` 仅在 `etch_mode="Depth window"` 且
+`depth_reference="Opening plane"` 时活动。非活动字段的草稿值保留在配方中，但不校验、
+不参与执行；未知参数仍拒绝，不因字段非活动而放行。M2 真实 HTTP 元数据与草稿保留由
+`tests/test_depth_window_etch.py::DepthWindowMetadataHTTPTests` 覆盖，M4 视图透传及候选编辑
+原子性由同文件的 `DepthWindowEtchTests::test_m4_real_view_and_edits_use_active_configuration_atomically`
+覆盖。
+
 步骤来源加法字段：真实 Recipe step blob 的 `step_id` 是持久化 UUID；旧文件缺失或非法
 identity 时生成新值，同配方重复 identity 保留首个并为后续步骤生成新值。改参数、改类型、
 移动及历史恢复保留 identity，复制步骤生成新 identity；`factory_templates` 不携带 identity。
