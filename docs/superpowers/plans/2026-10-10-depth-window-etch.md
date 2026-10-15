@@ -8,6 +8,18 @@
 
 **技术栈：** Python、NumPy／SciPy，现有 ProcessModel；React、TypeScript、Three.js。
 
+## 2026-10-15 续开发基线
+
+沿用所有者已批准的规格和两项参考规则，不重新定义几何行为。参数／几何提交
+保留至 `9a2b1ef`；`1d8b690` 将 main 的七项可靠性修复同步到本功能分支。
+同步前区间专项 46 项通过；同步后区间、Structure、编辑 HTTP、来源 HTTP 共
+105 项通过。当前从任务 3 继续；任务 4、5 依次执行，不能提前宣称 UI 已交付。
+
+工作树为 `~/.config/superpowers/worktrees/TCAD-Simulator/codex/structure-reliability`，
+分支为 `codex/depth-window-etch`。Python 使用 `/opt/anaconda3/bin/python3`，
+环境为 `TCAD_SKIP_QT=1 MPLBACKEND=Agg`，pycache 位于 `/tmp`。服务测试仅使用
+临时目录；不重启用户服务，不自动合并或推送 main。
+
 ## 文件职责
 
 - 新建 `structure_cad/depth_window_etch.py`：参数解析、冻结高度带、可达表面、受限扩展候选，禁止直接修改 model。
