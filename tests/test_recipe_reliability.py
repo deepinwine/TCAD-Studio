@@ -1,5 +1,9 @@
 import os
+import stat
+import tempfile
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -10,6 +14,200 @@ os.environ.setdefault('MPLBACKEND', 'Agg')
 import tcad_simulator as tcad
 from recipe_planner import RecipePlanner, RecipeValidator
 from recipe_planner.parser import PlannedStep, RecipeDraft
+
+
+class HeadlessMaskCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.db = tcad.MaterialDatabase()
+
+    def context(self):
+        ctx = tcad.SimulateContext(
+            self.db, grid_shape=(4, 4, 8), voxel_size_nm=5, max_workers=1,
+        )
+        self.addCleanup(lambda: ctx.model.parallel.shutdown() if ctx.model is not None else None)
+        self.addCleanup(ctx.clear_cache)
+        return ctx
+
+    def recipe(self, **mask_payload):
+        pattern = {'name': 'Structure Pattern', 'params': {'mask_mode': 'Custom'}}
+        pattern.update(mask_payload)
+        return [
+            {'name': 'Structure Wafer', 'params': {'material': 'Silicon', 'thickness_nm': 20}},
+            pattern,
+            {'name': 'Structure Etch', 'params': {'material': 'Silicon', 'depth_nm': 10}},
+        ]
+
+    def test_custom_mask_edit_recomputes_structure_suffix(self):
+        recipe = self.recipe(custom_mask=[[True, True, False, False]] * 4)
+        ctx = self.context()
+        tcad.simulate_headless(recipe, ctx=ctx)
+        np.testing.assert_array_equal(ctx.model.height_map, [[2, 2, 4, 4]] * 4)
+        wafer_snapshot = ctx.snapshots[0]
+        recipe[1]['custom_mask'] = [[False, False, True, True]] * 4
+        reused, _ = tcad.simulate_headless(recipe, ctx=ctx)
+        fresh_ctx = self.context()
+        fresh, _ = tcad.simulate_headless(recipe, ctx=fresh_ctx)
+        np.testing.assert_array_equal(fresh_ctx.model.height_map, [[4, 4, 2, 2]] * 4)
+        np.testing.assert_array_equal(reused, fresh)
+        self.assertIs(ctx.snapshots[0], wafer_snapshot)
+
+    def test_custom_mask_shape_affects_resampling_and_signature(self):
+        flat = np.array([True, True, False, False] * 4)
+        recipe = self.recipe(custom_mask=flat.reshape(2, 8).tolist())
+        ctx = self.context()
+        initial, _ = tcad.simulate_headless(recipe, ctx=ctx)
+        recipe[1]['custom_mask'] = flat.reshape(4, 4).tolist()
+        reused, _ = tcad.simulate_headless(recipe, ctx=ctx)
+        fresh, _ = tcad.simulate_headless(recipe, ctx=self.context())
+        self.assertFalse(np.array_equal(initial, fresh))
+        np.testing.assert_array_equal(reused, fresh)
+        for name in ('Structure Pattern', 'Mask Exposure'):
+            with self.subTest(name=name):
+                self.assertNotEqual(
+                    tcad._headless_step_signature({'name': name, 'custom_mask': flat.reshape(2, 8).tolist()}),
+                    tcad._headless_step_signature({'name': name, 'custom_mask': flat.reshape(4, 4).tolist()}),
+                )
+
+    def test_fractional_custom_mask_values_follow_boolean_execution(self):
+        recipe = self.recipe(custom_mask=[[1, 1, 0, 0]] * 4)
+        ctx = self.context()
+        tcad.simulate_headless(recipe, ctx=ctx)
+        recipe[1]['custom_mask'] = [[1, 1, 0.5, 0.5]] * 4
+        reused, _ = tcad.simulate_headless(recipe, ctx=ctx)
+        fresh_ctx = self.context()
+        fresh, _ = tcad.simulate_headless(recipe, ctx=fresh_ctx)
+        np.testing.assert_array_equal(fresh_ctx.model.height_map, np.full((4, 4), 2))
+        np.testing.assert_array_equal(reused, fresh)
+        for name in ('Structure Pattern', 'Mask Exposure'):
+            with self.subTest(name=name):
+                self.assertNotEqual(
+                    tcad._headless_step_signature({'name': name, 'custom_mask': [[1, 1, 0, 0]] * 4}),
+                    tcad._headless_step_signature({'name': name, 'custom_mask': [[1, 1, 0.5, 0.5]] * 4}),
+                )
+
+    def test_boolean_equivalent_masks_reuse_real_snapshots(self):
+        recipe = self.recipe(custom_mask=[[1, 1, 0, 0]] * 4)
+        ctx = self.context()
+        initial, _ = tcad.simulate_headless(recipe, ctx=ctx)
+        snapshots = dict(ctx.snapshots)
+        recipe[1]['custom_mask'] = [[0.5, 0.5, False, False]] * 4
+        reused, _ = tcad.simulate_headless(recipe, ctx=ctx)
+        np.testing.assert_array_equal(reused, initial)
+        for index, snapshot in snapshots.items():
+            self.assertIs(ctx.snapshots[index], snapshot)
+        for name in ('Structure Pattern', 'Mask Exposure'):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    tcad._headless_step_signature({'name': name, 'custom_mask': [[1, 1, 0, 0]] * 4}),
+                    tcad._headless_step_signature({'name': name, 'custom_mask': [[0.5, 0.5, False, False]] * 4}),
+                )
+
+    def test_mask_file_content_edit_invalidates_with_same_size_and_mtime(self):
+        with tempfile.TemporaryDirectory() as folder:
+            mask_path = Path(folder) / 'mask.npy'
+            for top_level in (False, True):
+                with self.subTest(top_level=top_level):
+                    np.save(mask_path, np.array([[True, True, False, False]] * 4))
+                    stat = mask_path.stat()
+                    recipe = self.recipe()
+                    if top_level:
+                        recipe[1]['mask_file'] = str(mask_path)
+                        recipe[1]['params']['mask_file'] = '/unused/overridden-mask.npy'
+                    else:
+                        recipe[1]['params']['mask_file'] = str(mask_path)
+                    ctx = self.context()
+                    initial, _ = tcad.simulate_headless(recipe, ctx=ctx)
+                    snapshots = dict(ctx.snapshots)
+                    np.save(mask_path, np.array([[True, True, False, False]] * 4))
+                    os.utime(mask_path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+                    self.assertNotEqual(mask_path.stat().st_mtime_ns, stat.st_mtime_ns)
+                    unchanged, _ = tcad.simulate_headless(recipe, ctx=ctx)
+                    np.testing.assert_array_equal(unchanged, initial)
+                    for index, snapshot in snapshots.items():
+                        self.assertIs(ctx.snapshots[index], snapshot)
+                    stat = mask_path.stat()
+                    exposure_blob = dict(recipe[1], name='Mask Exposure')
+                    exposure_sig = tcad._headless_step_signature(exposure_blob)
+                    np.save(mask_path, np.array([[False, False, True, True]] * 4))
+                    os.utime(mask_path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+                    self.assertEqual(mask_path.stat().st_size, stat.st_size)
+                    self.assertEqual(mask_path.stat().st_mtime_ns, stat.st_mtime_ns)
+                    reused, _ = tcad.simulate_headless(recipe, ctx=ctx)
+                    fresh_ctx = self.context()
+                    fresh, _ = tcad.simulate_headless(recipe, ctx=fresh_ctx)
+                    np.testing.assert_array_equal(fresh_ctx.model.height_map, [[4, 4, 2, 2]] * 4)
+                    np.testing.assert_array_equal(reused, fresh)
+                    self.assertNotEqual(tcad._headless_step_signature(exposure_blob), exposure_sig)
+                    self.assertIs(ctx.snapshots[0], snapshots[0])
+
+    def test_unconsumed_mask_files_are_not_opened(self):
+        cases = (
+            {'enabled': False, 'params': {'mask_mode': 'Custom'}},
+            {'params': {'mask_mode': 'Procedural'}},
+            {'params': {'mask_mode': 'Asset'}},
+            {'params': {'mask_mode': 'Custom'}, 'custom_mask': [[True]]},
+            {'params': {'mask_mode': 'Custom'}, 'custom_mask': None},
+            {'params': {'mask_mode': 'Custom', 'mask_file': '/unused/params.npy'}, 'mask_file': ''},
+        )
+        for name in ('Mask Exposure', 'Structure Pattern'):
+            for case in cases:
+                blob = {'name': name, 'mask_file': '/unused/mask.npy', **case}
+                with self.subTest(name=name, case=case), \
+                        patch('builtins.open', side_effect=AssertionError('unconsumed file')) as opened, \
+                        patch.object(tcad.os, 'open', side_effect=AssertionError('unconsumed file')) as fd_opened:
+                    tcad._headless_step_signature(blob)
+                    opened.assert_not_called()
+                    fd_opened.assert_not_called()
+
+    @unittest.skipUnless(hasattr(os, 'mkfifo') and Path('/dev/zero').exists(), 'POSIX special files')
+    def test_special_mask_files_are_not_opened(self):
+        with tempfile.TemporaryDirectory() as folder:
+            fifo = Path(folder) / 'mask.fifo'
+            os.mkfifo(fifo)
+            for name in ('Mask Exposure', 'Structure Pattern'):
+                for path in (fifo, Path('/dev/zero')):
+                    with self.subTest(name=name, path=path), \
+                            patch('builtins.open', side_effect=AssertionError('special file')) as opened, \
+                            patch.object(tcad.os, 'open', side_effect=AssertionError('special file')) as fd_opened:
+                        tcad._headless_step_signature({
+                            'name': name, 'params': {'mask_mode': 'Custom', 'mask_file': str(path)},
+                        })
+                        opened.assert_not_called()
+                        fd_opened.assert_not_called()
+
+    def test_opened_nonregular_mask_is_not_read_and_descriptor_is_closed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'mask.npy'
+            np.save(path, np.ones((4, 4), dtype=bool))
+            with patch.object(tcad.os, 'fstat', return_value=SimpleNamespace(st_mode=stat.S_IFIFO, st_size=0)), \
+                    patch.object(tcad.os, 'read', side_effect=AssertionError('nonregular read')) as read, \
+                    patch.object(tcad.os, 'close', wraps=os.close) as close:
+                tcad._headless_step_signature({
+                    'name': 'Structure Pattern', 'params': {'mask_mode': 'Custom', 'mask_file': str(path)},
+                })
+                read.assert_not_called()
+                self.assertEqual(close.call_count, 1)
+
+    def test_regular_mask_hash_is_bounded_by_opened_file_size(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'mask.npy'
+            path.touch()
+            blob = {'name': 'Structure Pattern', 'params': {'mask_mode': 'Custom', 'mask_file': str(path)}}
+            empty_sig = tcad._headless_step_signature(blob)
+            np.save(path, np.ones((4, 4), dtype=bool))
+            with patch.object(tcad.os, 'fstat', return_value=SimpleNamespace(st_mode=stat.S_IFREG, st_size=0)):
+                self.assertEqual(tcad._headless_step_signature(blob), empty_sig)
+
+    def test_mask_read_failure_closes_descriptor(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'mask.npy'
+            np.save(path, np.ones((4, 4), dtype=bool))
+            with patch.object(tcad.os, 'read', side_effect=OSError('read failed')), \
+                    patch.object(tcad.os, 'close', wraps=os.close) as close:
+                tcad._headless_step_signature({
+                    'name': 'Structure Pattern', 'params': {'mask_mode': 'Custom', 'mask_file': str(path)},
+                })
+                self.assertEqual(close.call_count, 1)
 
 
 class RecipeReliabilityTests(unittest.TestCase):

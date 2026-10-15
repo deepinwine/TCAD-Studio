@@ -20722,28 +20722,47 @@ def _headless_step_signature(step_blob: Any) -> str:
         params = {}
     token["params"] = params if isinstance(params, dict) else {}
 
-    # Exposure depends on the mask payload/file, not only params strings.
+    # Both ExposureStep consumers depend on mask payload/file, not only params strings.
     try:
-        if token["name"] == "Mask Exposure":
-            cm = step_blob.get("custom_mask", None)
-            if cm is not None:
+        if token["enabled"] and token["name"] in {"Mask Exposure", "Structure Pattern"}:
+            has_custom_mask = False
+            if "custom_mask" in step_blob:
                 try:
-                    arr = np.asarray(cm).astype(np.uint8, copy=False)
+                    arr = np.array(step_blob["custom_mask"], dtype=bool)
+                    has_custom_mask = True
                     h = hashlib.blake2s(arr.tobytes(order="C"), digest_size=16).hexdigest()
+                    token["custom_mask_shape"] = list(arr.shape)
                     token["custom_mask_hash"] = h
                 except Exception:
                     pass
-            mf = str(step_blob.get("mask_file", "") or token["params"].get("mask_file", "") or "").strip()
-            if mf:
+            mf = step_blob.get("mask_file", token["params"].get("mask_file", ""))
+            mode = token["params"].get("mask_mode", "Procedural")
+            if not has_custom_mask and mode in {"Custom", "Designer", "Image"} and mf:
+                mf = str(mf)
                 token["mask_file"] = mf
+                token["mask_file_hash"] = "unhashable"
                 try:
-                    st = os.stat(mf)
-                    token["mask_file_stat"] = {
-                        "size": int(st.st_size),
-                        "mtime_ns": int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))),
-                    }
+                    if stat.S_ISREG(os.stat(mf).st_mode):
+                        # Nonblocking open and fstat guard a path replaced by a FIFO.
+                        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+                        fd = os.open(mf, flags)
+                        try:
+                            opened_stat = os.fstat(fd)
+                            if stat.S_ISREG(opened_stat.st_mode):
+                                # Hash only the observed size, never follow endless appends.
+                                remaining = int(opened_stat.st_size)
+                                h = hashlib.blake2s(digest_size=16)
+                                while remaining > 0:
+                                    chunk = os.read(fd, min(remaining, 1024 * 1024))
+                                    if not chunk:
+                                        break
+                                    h.update(chunk)
+                                    remaining -= len(chunk)
+                                token["mask_file_hash"] = h.hexdigest()
+                        finally:
+                            os.close(fd)
                 except Exception:
-                    token["mask_file_stat"] = None
+                    token["mask_file_hash"] = None
     except Exception:
         pass
 
@@ -58337,14 +58356,19 @@ def _webui_worker_main(
         if not isinstance(blob, dict):
             return False
         from structure_cad.display_provenance import normalize_step_identities, validate_source_bound_identities
-        validate_source_bound_identities(blob.get("steps_full") or blob.get("steps"), blob.get("model_state"))
+        # Empty full steps are authoritative; only an absent/null optional field falls back.
+        stored_steps = blob.get("steps_full")
+        if stored_steps is None:
+            stored_steps = blob.get("steps")
+        validate_source_bound_identities(stored_steps, blob.get("model_state"))
+        if not isinstance(stored_steps, list):
+            return False
         try:
             stored_id = blob.get("recipe_id")
             stored_name = blob.get("recipe_name")
             state = blob.get("model_state")
-            stored_steps = blob.get("steps_full") or blob.get("steps")
             migration_warnings = []
-            if isinstance(stored_steps, list) and stored_steps:
+            if isinstance(stored_steps, list):
                 # History snapshots can contain legacy parameters; migrate in-memory before rebuilding.
                 try:
                     stored_steps, mig_warn = _recipe_migrate_resist_develop_time(stored_steps, from_version=_recipe_json_version(blob))
@@ -58355,32 +58379,29 @@ def _webui_worker_main(
                 rebuilt: List[ProcessStep] = []
                 for step_blob in stored_steps:
                     if not isinstance(step_blob, dict):
-                        continue
+                        return False
                     rebuilt_step = _webui_deserialize_step(step_blob, material_db)
-                    if rebuilt_step is not None:
-                        rebuilt.append(rebuilt_step)
+                    if rebuilt_step is None:
+                        return False
+                    rebuilt.append(rebuilt_step)
                 normalize_step_identities(rebuilt, preserve_ids=isinstance(state, dict) and state.get("display_owners") is not None)
                 validate_source_bound_identities([{"step_id": step.step_id} for step in rebuilt], state)
                 if isinstance(state, dict):
                     model.restore_state(state)
-                if rebuilt:
-                    blob["steps_full"] = [_webui_serialize_step(step) for step in rebuilt]
-                    steps = rebuilt
-                    try:
-                        for st in steps:
-                            msgs = _normalize_step_material_params(st, material_db, admin_cfg)
-                            if msgs:
-                                pending_warnings.extend(msgs)
-                                for m in msgs[:12]:
-                                    try:
-                                        model._log(m)
-                                    except Exception:
-                                        pass
-                    except Exception:
-                        pass
-
-            elif isinstance(state, dict):
-                model.restore_state(state)
+                blob["steps_full"] = [_webui_serialize_step(step) for step in rebuilt]
+                steps = rebuilt
+                try:
+                    for st in steps:
+                        msgs = _normalize_step_material_params(st, material_db, admin_cfg)
+                        if msgs:
+                            pending_warnings.extend(msgs)
+                            for m in msgs[:12]:
+                                try:
+                                    model._log(m)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
             # Publish recipe metadata only after detached source/grid validation and
             # restore succeed; failed autosaves must keep the current session binding.
             if isinstance(stored_id, str) and stored_id.strip():
@@ -58391,37 +58412,44 @@ def _webui_worker_main(
             if not current_recipe_id:
                 current_recipe_id = secrets.token_hex(8)
                 blob["recipe_id"] = current_recipe_id
-            # Ensure this last-active snapshot is persisted under the per-recipe file.
-            stamp = str(blob.get("timestamp") or _webui_timestamp())
-            note = str(blob.get("note") or "").strip()[:200]
-            entry = _find_recipe_entry(current_recipe_id)
-            if entry is None:
-                entry = _create_recipe_entry(current_recipe_name, note, entry_id=current_recipe_id, autosave=False, stamp=stamp)
-            entry["timestamp"] = stamp
-            entry["name"] = str(current_recipe_name).strip()[:80] or "Untitled"
-            entry["note"] = note
-            blob["recipe_name"] = entry["name"]
-            blob["recipe_id"] = current_recipe_id
-            main_path = paths["history_dir"] / str(entry.get("file", f"{current_recipe_id}.pkl.gz"))
-            autosave_path = _recipe_autosave_path(current_recipe_id)
-            if bool(blob.get("autosave", False)):
-                entry["autosave"] = True
-                _webui_pickle_dump(autosave_path, blob)
-                if not main_path.exists():
-                    try:
+            # Compatibility writeback follows a successful restore. Its I/O failure
+            # must not report a failed load after publishing the model and recipe.
+            writeback_failed = False
+            try:
+                stamp = str(blob.get("timestamp") or _webui_timestamp())
+                note = str(blob.get("note") or "").strip()[:200]
+                entry = _find_recipe_entry(current_recipe_id)
+                if entry is None:
+                    entry = _create_recipe_entry(current_recipe_name, note, entry_id=current_recipe_id, autosave=False, stamp=stamp)
+                entry["timestamp"] = stamp
+                entry["name"] = str(current_recipe_name).strip()[:80] or "Untitled"
+                entry["note"] = note
+                blob["recipe_name"] = entry["name"]
+                blob["recipe_id"] = current_recipe_id
+                main_path = paths["history_dir"] / str(entry.get("file", f"{current_recipe_id}.pkl.gz"))
+                autosave_path = _recipe_autosave_path(current_recipe_id)
+                if bool(blob.get("autosave", False)):
+                    entry["autosave"] = True
+                    _webui_pickle_dump(autosave_path, blob)
+                    if not main_path.exists():
                         _webui_pickle_dump(main_path, blob)
+                else:
+                    entry["autosave"] = False
+                    _webui_pickle_dump(main_path, blob)
+                    try:
+                        autosave_path.unlink(missing_ok=True)  # type: ignore[arg-type]
                     except Exception:
                         pass
-            else:
-                entry["autosave"] = False
-                _webui_pickle_dump(main_path, blob)
+            except Exception:
+                writeback_failed = True
+            # Attempt resume pointers independently even if the history write failed.
+            for writeback in (lambda: _webui_pickle_dump(paths["autosave"], blob), _write_history_index, _write_session_state):
                 try:
-                    autosave_path.unlink(missing_ok=True)  # type: ignore[arg-type]
+                    writeback()
                 except Exception:
-                    pass
-            _webui_pickle_dump(paths["autosave"], blob)
-            _write_history_index()
-            _write_session_state()
+                    writeback_failed = True
+            if writeback_failed:
+                pending_warnings.append("Auto-save restored, but compatibility snapshot writeback failed.")
             model_revision += 1
             preview_ready.clear()
             _reset_step_runtime_statuses()
@@ -58483,14 +58511,18 @@ def _webui_worker_main(
         if not isinstance(blob, dict):
             return False
         from structure_cad.display_provenance import normalize_step_identities, validate_source_bound_identities
-        validate_source_bound_identities(blob.get("steps_full") or blob.get("steps"), blob.get("model_state"))
+        stored_steps = blob.get("steps_full")
+        if stored_steps is None:
+            stored_steps = blob.get("steps")
+        validate_source_bound_identities(stored_steps, blob.get("model_state"))
+        if not isinstance(stored_steps, list):
+            return False
         blob["recipe_id"] = str(entry.get("id", "")).strip()
         if not isinstance(blob.get("recipe_name"), str) or not str(blob.get("recipe_name")).strip():
             blob["recipe_name"] = entry.get("name", "Untitled")
         try:
             state = blob.get("model_state")
-            stored_steps = blob.get("steps_full") or blob.get("steps")
-            if isinstance(stored_steps, list) and stored_steps:
+            if isinstance(stored_steps, list):
                 # History snapshots can contain legacy parameters; migrate in-memory before rebuilding.
                 try:
                     stored_steps, mig_warn = _recipe_migrate_resist_develop_time(stored_steps, from_version=_recipe_json_version(blob))
@@ -58509,34 +58541,37 @@ def _webui_worker_main(
                 rebuilt: List[ProcessStep] = []
                 for step_blob in stored_steps:
                     if not isinstance(step_blob, dict):
-                        continue
+                        return False
                     rebuilt_step = _webui_deserialize_step(step_blob, material_db)
-                    if rebuilt_step is not None:
-                        rebuilt.append(rebuilt_step)
+                    if rebuilt_step is None:
+                        return False
+                    rebuilt.append(rebuilt_step)
                 normalize_step_identities(rebuilt, preserve_ids=isinstance(state, dict) and state.get("display_owners") is not None)
                 validate_source_bound_identities([{"step_id": step.step_id} for step in rebuilt], state)
                 if isinstance(state, dict):
                     model.restore_state(state)
-                if rebuilt:
-                    normalized_blobs = [_webui_serialize_step(step) for step in rebuilt]
-                    if blob.get("steps_full") != normalized_blobs:
-                        blob["steps_full"] = normalized_blobs
-                        _webui_pickle_dump(autosave_path if loaded_autosave else main_path, blob)
-                    steps = rebuilt
+                normalized_blobs = [_webui_serialize_step(step) for step in rebuilt]
+                if blob.get("steps_full") != normalized_blobs:
+                    blob["steps_full"] = normalized_blobs
+                    # Normalization is a best-effort migration; a write failure must
+                    # not leave the restored model bound to the previous recipe.
                     try:
-                        for st in steps:
-                            msgs = _normalize_step_material_params(st, material_db, admin_cfg)
-                            if msgs:
-                                pending_warnings.extend(msgs)
-                                for m in msgs[:12]:
-                                    try:
-                                        model._log(m)
-                                    except Exception:
-                                        pass
+                        _webui_pickle_dump(autosave_path if loaded_autosave else main_path, blob)
                     except Exception:
-                        pass
-            elif isinstance(state, dict):
-                model.restore_state(state)
+                        pending_warnings.append("Recipe restored, but normalized snapshot writeback failed.")
+                steps = rebuilt
+                try:
+                    for st in steps:
+                        msgs = _normalize_step_material_params(st, material_db, admin_cfg)
+                        if msgs:
+                            pending_warnings.extend(msgs)
+                            for m in msgs[:12]:
+                                try:
+                                    model._log(m)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
             current_recipe_id = str(entry.get("id", "")).strip()
             current_recipe_name = str(blob.get("recipe_name") or entry.get("name") or "Untitled").strip()[:80] or "Untitled"
             try:
@@ -58570,13 +58605,17 @@ def _webui_worker_main(
                     current_ui_state.pop("dock_layout", None)
             except Exception:
                 pass
-            _write_session_state()
-            # Update "last active" pointer for restart-resume.
-            try:
-                blob["autosave"] = bool(loaded_autosave)
-                _webui_pickle_dump(paths["autosave"], blob)
-            except Exception:
-                pass
+            # Both resume pointers are best-effort after successful publication;
+            # one write failure must not skip the other pointer or cache cleanup.
+            blob["autosave"] = bool(loaded_autosave)
+            writeback_failed = False
+            for writeback in (_write_session_state, lambda: _webui_pickle_dump(paths["autosave"], blob)):
+                try:
+                    writeback()
+                except Exception:
+                    writeback_failed = True
+            if writeback_failed:
+                pending_warnings.append("Recipe restored, but resume pointer writeback failed.")
             # Sync displayed autosave flag with actual backup existence.
             try:
                 entry["autosave"] = _recipe_autosave_path(current_recipe_id).exists()
@@ -58588,6 +58627,61 @@ def _webui_worker_main(
             return True
         except Exception:
             return False
+
+    def _initialize_default_recipe(*, reset_model: bool = False) -> None:
+        nonlocal steps, model, model_revision, current_recipe_name, current_recipe_id, current_ui_state
+        # Share the startup ten-step Untitled semantics. A deleted recipe must
+        # also lose its substrate/material state, which configure_domain retains.
+        fresh_steps = _webui_default_recipe(material_db)
+        try:
+            for st in fresh_steps:
+                _webui_apply_admin_step_defaults(st, admin_cfg)
+        except Exception:
+            pass
+        fresh_model = model
+        if reset_model:
+            fresh_model = ProcessModel(
+                material_db, grid_shape=default_domain_shape,
+                voxel_size_nm=default_domain_voxel_nm, max_workers=default_domain_threads,
+            )
+            fresh_model.surface_reaction_rate_table = model.surface_reaction_rate_table
+            fresh_model.anneal_diffusivity_table = model.anneal_diffusivity_table
+        try:
+            for st in fresh_steps:
+                msgs = _normalize_step_material_params(st, material_db, admin_cfg)
+                if msgs:
+                    pending_warnings.extend(msgs)
+                    for message in msgs[:12]:
+                        try:
+                            fresh_model._log(message)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        if not reset_model:
+            _set_threads_quiet(default_domain_threads)
+            try:
+                fresh_model.configure_domain(default_domain_shape, default_domain_voxel_nm)
+            except Exception:
+                try:
+                    fresh_model.configure_domain(safe_shape, safe_voxel_nm)
+                except Exception:
+                    fresh_model.reset_state()
+        if reset_model:
+            old_model = model
+            model = fresh_model
+            old_model.set_log_sink(None)
+            model.set_log_sink(paths.get("live_log"))
+            old_model.parallel.shutdown()
+            model_revision += 1
+            preview_ready.clear()
+        steps = fresh_steps
+        current_recipe_name = "Untitled"
+        current_recipe_id = ""
+        current_ui_state = {}
+        _reset_step_runtime_statuses()
+        if not ephemeral:
+            _manual_save("init")
 
     # One-time migration: ensure legacy autosave flags map to per-recipe autosave files.
     _migrate_legacy_autosave_flags()
@@ -58679,38 +58773,7 @@ def _webui_worker_main(
             if best_id:
                 loaded = _load_recipe_entry(best_id)
     if not loaded or not current_recipe_id:
-        current_recipe_name = "Untitled"
-        steps = _webui_default_recipe(material_db)
-        try:
-            for st in steps:
-                _webui_apply_admin_step_defaults(st, admin_cfg)
-        except Exception:
-            pass
-        _reset_step_runtime_statuses()
-        try:
-            for st in steps:
-                msgs = _normalize_step_material_params(st, material_db, admin_cfg)
-                if msgs:
-                    pending_warnings.extend(msgs)
-                    for m in msgs[:12]:
-                        try:
-                            model._log(m)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-        _set_threads_quiet(default_domain_threads)
-        try:
-            model.configure_domain(default_domain_shape, default_domain_voxel_nm)
-        except Exception:
-            try:
-                model.configure_domain(safe_shape, safe_voxel_nm)
-            except Exception:
-                model.reset_state()
-        current_recipe_id = ""
-        current_ui_state = {}
-        if not ephemeral:
-            _manual_save("init")
+        _initialize_default_recipe()
 
     # -----------------------------------------------------------------------
     # Large-grid memory controls
@@ -59144,6 +59207,10 @@ def _webui_worker_main(
     # Direct run_step checkpoints are valid for timeline viewing, but they are not
     # necessarily a recipe-prefix state and therefore must not seed incremental reuse.
     step_cache_step_sources: Dict[int, str] = {}
+    # Cached model-only checkpoints may predate a recipe deletion. Retire only
+    # identities explicitly removed in this cache lifecycle; recipe-aware undo
+    # restores its own identities. Caches are session-local and never persisted.
+    step_cache_removed_step_ids: Set[str] = set()
     # May be adjusted by `_update_cache_policy()` based on domain size.
     step_cache_max_steps: int = int(step_cache_max_steps)
 
@@ -59157,12 +59224,25 @@ def _webui_worker_main(
         step_cache_ctx_sig = ""
         step_cache_step_sigs = {}
         step_cache_step_sources = {}
+        step_cache_removed_step_ids.clear()
         try:
             for v in list(step_cache_step_states.values()):
                 _snap_drop(v)
         except Exception:
             pass
         step_cache_step_states = {}
+
+    def _restore_recipe_bound_step_snapshot(snapshot: Dict[str, Any], **kwargs: Any) -> None:
+        """Restore a cache checkpoint, then retire known deletions and validate binding."""
+        from structure_cad.display_provenance import validate_source_bound_identities
+        model.restore_state(snapshot, **kwargs)
+        for identity in step_cache_removed_step_ids:
+            model.display_provenance.forget_step(identity)
+        validate_source_bound_identities(
+            [{"step_id": step.step_id} for step in steps],
+            {"display_owners": model.display_provenance.owners,
+             "display_step_ids": model.display_provenance.step_ids},
+        )
 
     def _json_sanitize_for_sig(v: Any) -> Any:
         if v is None:
@@ -59448,18 +59528,6 @@ def _webui_worker_main(
             bb_steps_sig = h.hexdigest()
         except Exception:
             bb_steps_sig = ""
-        try:
-            WaferContextManager.begin_run(
-                current_ui_state,
-                run_id=str(bb_run_id),
-                recipe_id=str(current_recipe_id),
-                recipe_name=str(current_recipe_name),
-                ctx_sig=str(ctx_sig),
-                steps_sig=str(bb_steps_sig),
-                upto_step_index=int(upto_i),
-            )
-        except Exception:
-            pass
 
         def _finalize_incremental_failure(step_index: int, failure: Dict[str, Any]) -> Dict[str, Any]:
             _finalize_active_agent_run(
@@ -59498,16 +59566,6 @@ def _webui_worker_main(
                 break
             reuse_last_step = int(i)
 
-        # Drop any stale suffix cache entries once a mismatch is detected.
-        if reuse_last_step + 1 < len(step_sigs_all):
-            for k in list(step_cache_step_sigs.keys()):
-                if int(k) > int(reuse_last_step):
-                    step_cache_step_sigs.pop(int(k), None)
-                    step_cache_step_sources.pop(int(k), None)
-            for k in list(step_cache_step_states.keys()):
-                if int(k) > int(reuse_last_step):
-                    _snap_drop(step_cache_step_states.pop(int(k), None))
-
         # Restore from the cached prefix as far as possible (but never beyond `upto_i`).
         restore_idx = int(min(int(upto_i), int(reuse_last_step)))
         reuse_n = 0  # number of FULL loop stations reused (for UI)
@@ -59521,7 +59579,7 @@ def _webui_worker_main(
             reuse_n = 0
 
         # Match existing semantics: allow undo back to the pre-run state.
-        _push_undo()
+        undo_token = _push_undo(defer_trim=True)
 
         last_step_snap: Any = None
         if restore_idx >= 0:
@@ -59530,14 +59588,57 @@ def _webui_worker_main(
                 snap_ref = step_cache_step_states.get(int(restore_idx))
                 snap0 = _snap_load(snap_ref)
                 if isinstance(snap0, dict):
-                    model.restore_state(snap0, emit_log=True, log_prefix="[cache] ", progress_label=label)
+                    restored = _run_model_transaction(
+                        model,
+                        lambda: _restore_recipe_bound_step_snapshot(
+                            snap0, emit_log=True, log_prefix="[cache] ", progress_label=label
+                        ),
+                    )
+                    if not restored.get("ok"):
+                        if restored.get("rolled_back") or restored.get("snapshot_error"):
+                            _abort_undo(undo_token)
+                        else:
+                            # A failed rollback can leave the cached model partially
+                            # published. Keep its recovery undo and refresh presentation.
+                            _commit_undo(undo_token)
+                            model_revision += 1
+                            preview_ready.clear()
+                        return {**restored, "code": "restore_failed", "log": model.history[-250:],
+                                "model_revision": int(model_revision)}
                     last_step_snap = snap_ref
                 else:
                     restore_idx = -1
-            except Exception:
-                restore_idx = -1
+            except Exception as exc:
+                _abort_undo(undo_token)
+                return {"ok": False, "code": "restore_failed", "error": str(exc),
+                        "error_type": type(exc).__name__, "rolled_back": False,
+                        "log": model.history[-250:]}
         if restore_idx < 0:
             model.reset_state()
+
+        # Publish cache/history changes only after a usable restore or normal cache miss.
+        # A rejected source-bound snapshot must not invalidate timeline checkpoints.
+        if reuse_last_step + 1 < len(step_sigs_all):
+            for k in list(step_cache_step_sigs.keys()):
+                if int(k) > int(reuse_last_step):
+                    step_cache_step_sigs.pop(int(k), None)
+                    step_cache_step_sources.pop(int(k), None)
+            for k in list(step_cache_step_states.keys()):
+                if int(k) > int(reuse_last_step):
+                    _snap_drop(step_cache_step_states.pop(int(k), None))
+        _commit_undo(undo_token)
+        try:
+            WaferContextManager.begin_run(
+                current_ui_state,
+                run_id=str(bb_run_id),
+                recipe_id=str(current_recipe_id),
+                recipe_name=str(current_recipe_name),
+                ctx_sig=str(ctx_sig),
+                steps_sig=str(bb_steps_sig),
+                upto_step_index=int(upto_i),
+            )
+        except Exception:
+            pass
 
         for completed_index in range(0, int(restore_idx) + 1):
             _set_step_runtime_status(completed_index, "done")
@@ -72199,7 +72300,13 @@ def _webui_worker_main(
                 idx = int(payload.get("index", -1))
                 if not (0 <= idx < len(steps)):
                     raise ValueError("Invalid step index")
+                removed_step_id = steps[idx].step_id
+                retired_ids = step_cache_removed_step_ids | {removed_step_id}
+                model.display_provenance.forget_step(removed_step_id)
                 del steps[idx]
+                step_cache_removed_step_ids = retired_ids
+                model_revision += 1
+                preview_ready.clear()
                 _invalidate_step_runtime_statuses(idx)
                 try:
                     _agent_shift_step_meta_remove(int(idx))
@@ -72328,20 +72435,31 @@ def _webui_worker_main(
                         "rid": rid,
                     })
                     continue
+                undo_token = _push_undo(defer_trim=True)
                 restored = _run_model_transaction(
                     model,
-                    lambda: model.restore_state(snap, emit_log=True, log_prefix="[timeline] "),
+                    lambda: _restore_recipe_bound_step_snapshot(snap, emit_log=True, log_prefix="[timeline] "),
                 )
                 if not restored.get("ok"):
+                    if restored.get("rolled_back") or restored.get("snapshot_error"):
+                        _abort_undo(undo_token)
+                    else:
+                        # A failed rollback may leave a partial timeline restore.
+                        # Keep the pre-restore recovery point and refresh display data.
+                        _commit_undo(undo_token)
+                        model_revision += 1
+                        preview_ready.clear()
                     conn.send({
                         "ok": False,
                         "error": f"快照恢复失败：{restored.get('error', 'unknown error')}",
                         "code": "restore_failed",
                         "rolled_back": bool(restored.get("rolled_back", False)),
                         "rollback_error": str(restored.get("rollback_error", "") or ""),
+                        "model_revision": int(model_revision),
                         "rid": rid,
                     })
                     continue
+                _abort_undo(undo_token)
                 timeline_current_index = int(index)
                 model_revision += 1
                 preview_ready.clear()
@@ -72674,6 +72792,7 @@ def _webui_worker_main(
                 loaded = _load_autosave()
                 if loaded:
                     _clear_all_history()
+                    _invalidate_loop_cache()
                 conn.send(
                     {
                         "ok": True,
@@ -72700,6 +72819,7 @@ def _webui_worker_main(
                 if not _load_recipe_entry(entry_id):
                     raise ValueError("History entry not found")
                 _clear_all_history()
+                _invalidate_loop_cache()
                 conn.send(
                     {
                         "ok": True,
@@ -72835,6 +72955,37 @@ def _webui_worker_main(
                 entry_id = str(payload.get("id", "")).strip()
                 if not entry_id:
                     raise ValueError("Missing recipe id")
+                if _find_recipe_entry(entry_id) is None:
+                    raise ValueError("Recipe not found")
+                deleting_current = entry_id == current_recipe_id
+                if deleting_current and video_active:
+                    raise ValueError("视频导出正在进行，请结束或取消导出后重试删除当前配方。")
+                # Retire old resume data before deleting the entry. New snapshot
+                # writeback is best-effort and cannot be our only protection from
+                # resurrecting the deleted ID on an EOF/restart.
+                global_points_to_deleted = deleting_current
+                if not global_points_to_deleted and paths["autosave"].exists():
+                    try:
+                        global_blob = _webui_pickle_load(paths["autosave"])
+                        global_points_to_deleted = isinstance(global_blob, dict) and global_blob.get("recipe_id") == entry_id
+                    except Exception:
+                        pass
+                if global_points_to_deleted:
+                    paths["autosave"].unlink(missing_ok=True)
+                session_state = _read_session_state()
+                if deleting_current or entry_id in (session_state.get("current_recipe_id"), session_state.get("last_active_recipe_id")):
+                    previous_id = current_recipe_id
+                    if deleting_current:
+                        current_recipe_id = ""
+                    try:
+                        _write_session_state()
+                    except Exception:
+                        current_recipe_id = previous_id
+                        raise
+                if deleting_current:
+                    autosave_pending = False
+                    autosave_note = ""
+                    autosave_requested_ts = 0.0
                 removed = False
                 kept: List[Dict[str, Any]] = []
                 for entry in history_index:
@@ -72855,29 +73006,25 @@ def _webui_worker_main(
                 history_index = kept
                 _write_history_index()
                 switched = False
-                if entry_id == current_recipe_id:
-                    if history_index:
-                        best = max(history_index, key=lambda e: str(e.get("timestamp", "")))
-                        best_id = str(best.get("id", "")).strip()
-                        if best_id and _load_recipe_entry(best_id):
-                            switched = True
-                    if not current_recipe_id:
-                        current_recipe_name = "Untitled"
-                        steps = _webui_default_recipe(material_db)
-                        _reset_step_runtime_statuses()
-                        _set_threads_quiet(default_domain_threads)
+                if deleting_current:
+                    for candidate in sorted(history_index, key=lambda entry: str(entry.get("timestamp", "")), reverse=True):
+                        candidate_id = str(candidate.get("id", "")).strip()
                         try:
-                            model.configure_domain(default_domain_shape, default_domain_voxel_nm)
+                            switched = bool(candidate_id and _load_recipe_entry(candidate_id))
                         except Exception:
-                            try:
-                                model.configure_domain(safe_shape, safe_voxel_nm)
-                            except Exception:
-                                model.reset_state()
-                        current_recipe_id = ""
-                        _manual_save("init")
+                            # Source-bound validation deliberately throws outside
+                            # the loader's restore try; reject this candidate only.
+                            switched = False
+                        if switched:
+                            break
+                    if not switched:
+                        _initialize_default_recipe(reset_model=True)
                         switched = True
                 if switched:
                     _clear_all_history()
+                    _invalidate_loop_cache()
+                    timeline_current_index = -1
+                    _update_cache_policy()
                 conn.send(
                     {
                         "ok": True,
@@ -73155,6 +73302,7 @@ def _webui_worker_main(
                 except Exception:
                     pass
                 _clear_all_history()
+                _invalidate_loop_cache()
                 model_revision += 1
                 preview_ready.clear()
                 current_recipe_id = ""
@@ -76996,7 +77144,9 @@ class WebUIServerManager:
         self._stop_event.set()
         if self._httpd is not None:
             try:
-                self._httpd.shutdown()
+                # BaseServer.shutdown waits forever if serve_forever never started.
+                if self.running:
+                    self._httpd.shutdown()
             except Exception:
                 pass
             try:
