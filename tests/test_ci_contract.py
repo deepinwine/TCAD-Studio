@@ -77,6 +77,7 @@ class CIContractTests(unittest.TestCase):
             "tests.test_structure_cad", "tests.test_structure_cad_http",
             "tests.test_structure_display_geometry", "tests.test_structure_display_provenance",
             "tests.test_structure_display_http", "tests.test_structure_editor_http",
+            "tests.test_depth_window_etch", "tests.test_depth_window_etch_http",
             "tests.test_tcad_studio_launcher",
         }
         self.assertFalse(required - modules, f"Missing core modules: {sorted(required - modules)}")

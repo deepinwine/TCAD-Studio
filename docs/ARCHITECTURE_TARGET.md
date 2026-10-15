@@ -156,6 +156,35 @@ optional 数值的默认值与未设置参数保留 JSON `null`。旧响应缺�
 原子性由同文件的 `DepthWindowEtchTests::test_m4_real_view_and_edits_use_active_configuration_atomically`
 覆盖。
 
+深度区间刻蚀加法参数（ADR-031）：沿用 `Structure Etch` 的 `params` 对象、
+`/api/recipe/add`、`/api/step/set`、`/api/recipe/import` 和既有 run 端点；不增加
+区间专用端点或执行器。`etch_mode` 缺省为 `Standard`，保留原 `depth_nm` 与
+`sidewall_angle_deg` 的执行结果；旧物理 `Etch` 保留其原有工厂与时间语义。
+
+| 参数 | 默认值 | 活动条件与含义 |
+| --- | --- | --- |
+| `etch_mode` | `Standard` | `Standard` 或 `Depth window` |
+| `depth_reference` | `Opening plane` | 区间模式；`Opening plane` 或 `Fixed Z` |
+| `start_depth_nm` / `end_depth_nm` | `100` / `200` | 孔口参考；非负且 start < end，形成 `[ref-end, ref-start)` |
+| `lower_z_nm` / `upper_z_nm` | `100` / `200` | 固定 Z 参考；有限且 lower < upper，形成 `[lower, upper)` |
+| `etch_distance_nm` | `30` | 区间模式；有限正数，表示从原始接触面片起算的几何距离 |
+| `directionality_percent` | `0` | 区间模式；有限数值 0–100，连续控制向下方向性 |
+
+以上长度均为 nm。参数预检只检查活动配置与可表示范围，不执行工艺，也不依据
+当前最终模型解析未来步骤的孔口或空气通道；真实执行只使用该步骤的实际输入。
+非法编辑/导入拒绝时保留配方、模型、来源、运行状态、历史、Timeline、会话绑定与
+有效保存文件。执行失败沿用既有 `ok:false`、`rolled_back` 等平面错误字段，当前
+步骤标为 `error`，不发布候选 grid、owner 或成功快照；已完成前缀仍按既有逐步
+事务语义处理。非活动草稿随导出、命名保存、autosave 和重启加载保留。
+
+`tests/test_depth_window_etch_http.py::DepthWindowEtchHTTPTests` 使用隔离的真实 HTTP
+worker 覆盖 add/set/import/run、相对/固定带的 0%/50% 逐体素独立面片 oracle、
+带外/非目标材料/来源不变、未来 Fill/CMP 的预检边界、旧 Standard/物理 Etch、
+全工厂类型替换 identity/复制、草稿保存恢复及非法候选/通道/内存/访问预算回滚。
+其中 `test_import_and_edit_do_not_resolve_final_or_future_geometry` 验证 300 nm 孔的
+实际步骤输入，`test_inactive_drafts_roundtrip_named_autosave_and_restart` 验证恢复链路；
+`tests/test_depth_window_etch.py` 与该 HTTP 模块都列入 CI Core backend tests。
+
 步骤来源加法字段：真实 Recipe step blob 的 `step_id` 是持久化 UUID；旧文件缺失或非法
 identity 时生成新值，同配方重复 identity 保留首个并为后续步骤生成新值。改参数、改类型、
 移动及历史恢复保留 identity，复制步骤生成新 identity；`factory_templates` 不携带 identity。

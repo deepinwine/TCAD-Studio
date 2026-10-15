@@ -239,3 +239,29 @@ Rules:
 - 来源数组、网格生成和首次显示准备有内存与时间成本，必须有预算与回归；
   不宣称零开销。同 revision 的眼睛切换不重新提取网格，不重挂 Viewer、不重置相机。
 - 实施规格见 `docs/superpowers/specs/2026-10-09-step-display-visibility-design.md`。
+
+ADR-031 — Structure Etch 的 Depth window 是区间受限几何操作（2026-10-15）。
+Reason: 已有深孔需要只在指定高度带内扩蚀，所有者批准以直接几何距离和方向性
+控制形状；不能把区间长度猜成物理速率，也不能修改孔口、半格坐标与带外材料。
+Rules:
+- `etch_mode` 缺省 `Standard`，原 `depth_nm`/`sidewall_angle_deg` 结果保持不变；
+  `Depth window` 复用 StructureEtch → preflight → ProcessStep.execute → ProcessModel，
+  不增加专用端点、执行器或物理模型。旧物理 `Etch` 不自动迁移。
+- 体素中心是 `i*voxel`，实体上边界是 `(i+.5)*voxel`。`Opening plane` 的参考面
+  冻结为开口四邻接一格孔沿中非空柱的最高实体上边界，不能使用孔底或远处高柱；
+  全开口使用全域最高实体，孔沿为空时拒绝并提示 `Fixed Z`。
+- 相对带是 `[ref-end_depth_nm, ref-start_depth_nm)`，固定带是
+  `[lower_z_nm, upper_z_nm)`；按体素中心选择，严格保持带外体素不变。
+  start/end 与 lower/upper 默认 100/200 nm，距离默认 30 nm，方向性默认 0%。
+- 种子冻结为原始空气与目标材料的真实接触面片，且仅允许已有 top mask 开口的
+  空气可达表面。不能从侧面启动、穿过其他材料或进入封闭空腔；不以重复膨胀
+  补足预算。非目标材料及未删除位置的来源保持，删除位置 owner 清零。
+- 令 `a=directionality_percent/100`、`r=etch_distance_nm`，扫掠为半径
+  `(1-a)*r` 的球与长度 `a*r` 的 -Z 线段之和；距离从面片起算，不能改为中心距离。
+  100% 在纯竖直壁面不会横向削去一层，壁面区间无有效删除时明确拒绝。
+- 编辑/导入只做活动参数预检，不运行当前最终模型或解析未来几何；参考面、通道
+  与空间预算在真实执行时检查。非活动字段保留草稿但不参与验证或执行，未知字段
+  与活动非法值仍拒绝。无通道、无有效删除、内存或访问预算失败沿用既有事务错误，
+  不发布部分候选、来源或成功快照，不覆盖有效保存；来源绑定检查不放宽。
+- HTTP 参数与命名测试见 `docs/ARCHITECTURE_TARGET.md`，几何和兼容链路分别由
+  `tests/test_depth_window_etch.py`、`tests/test_depth_window_etch_http.py` 覆盖并进入 CI。
