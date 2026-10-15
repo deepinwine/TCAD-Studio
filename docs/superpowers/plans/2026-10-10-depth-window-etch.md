@@ -13,7 +13,10 @@
 沿用所有者已批准的规格和两项参考规则，不重新定义几何行为。参数／几何提交
 保留至 `9a2b1ef`；`1d8b690` 将 main 的七项可靠性修复同步到本功能分支。
 同步前区间专项 46 项通过；同步后区间、Structure、编辑 HTTP、来源 HTTP 共
-105 项通过。当前从任务 3 继续；任务 4、5 依次执行，不能提前宣称 UI 已交付。
+105 项通过。任务 3 已在 `8c02796`、`9c08516` 完成兼容验收，并通过独立
+SPEC、QUALITY；最新最小依赖 CI 为 590 tests、OK、13 skipped。
+下一段从任务 4 继续，随后执行任务 5，不能提前宣称 UI 已交付。
+本轮范围与故障注入证据见 `docs/superpowers/2026-10-15-depth-window-task3-review.md`。
 
 工作树为 `~/.config/superpowers/worktrees/TCAD-Simulator/codex/structure-reliability`，
 分支为 `codex/depth-window-etch`。Python 使用 `/opt/anaconda3/bin/python3`，
@@ -117,4 +120,4 @@ np.testing.assert_array_equal(model.grid, before)
 
 ## 自检与执行顺序
 
-规格 1、2 对应任务 1、4；规格 3 对应任务 2；规格 4 对应任务 2、3；规格 5 对应任务 4；规格 6 对应任务 1–5。步骤显示计划不变，本计划在其交付后执行。当前没有任何区间刻蚀实现完成的声明。
+规格 1、2 对应任务 1、4；规格 3 对应任务 2；规格 4 对应任务 2、3；规格 5 对应任务 4；规格 6 对应任务 1–5。步骤显示计划不变，本计划在其交付后执行。进展以 Git 历史和验收记录为准；任务 3 通过不代表检查器、浏览器验收或整个功能已发布。
