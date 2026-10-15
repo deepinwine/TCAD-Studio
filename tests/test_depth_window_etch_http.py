@@ -226,26 +226,49 @@ class DepthWindowEtchHTTPTests(unittest.TestCase):
         before_grid = self.worker()['model'].grid.copy()
         before_owners = self.worker()['model'].display_provenance.owners.copy()
         source_ids = dict(self.worker()['model'].display_provenance.step_ids)
+        canonical = copy.deepcopy(self.recipe())
+        canonical_params = [step['params'] for step in canonical]
+        canonical_types = [{key: type(value) for key, value in params.items()}
+                           for params in canonical_params]
+        step_ids = [step['step_id'] for step in canonical]
+
+        def assert_restored(stage, binding):
+            current = self.request('GET', '/api/init')['result']
+            actual_params = [step['params'] for step in current['recipe']]
+            self.assertEqual([step['step_id'] for step in current['recipe']], step_ids, stage)
+            self.assertEqual(actual_params, canonical_params, stage)
+            self.assertEqual([{key: type(value) for key, value in params.items()}
+                              for params in actual_params], canonical_types, stage)
+            model = self.worker()['model']
+            np.testing.assert_array_equal(model.grid, before_grid, err_msg=stage)
+            np.testing.assert_array_equal(model.display_provenance.owners, before_owners, err_msg=stage)
+            self.assertEqual(model.display_provenance.step_ids, source_ids, stage)
+            self.assertEqual(current['current_recipe'], binding, stage)
+
         status, _, raw = self._request(self.manager.url, self.cookie, 'GET', '/api/recipe/export?scope=current', None)
         self.assertEqual(status, 200)
         exported = json.loads(raw)
         identity = self.recipe()[index]['step_id']
-        self.request('POST', '/api/recipe/import', {'recipe': exported})
+        imported = self.request('POST', '/api/recipe/import', {'recipe': exported})['result']
         self.assertEqual(self.recipe()[index]['step_id'], identity)
         self.request('POST', '/api/run/all', {})
+        assert_restored('import run', imported['current_recipe'])
         saved = self.request('POST', '/api/recipe/save', {'name': '区间草稿保存'})['result']
+        named_binding = {'name': '区间草稿保存', 'id': saved['id']}
         self.request('POST', '/api/save', {})
         session = next(iter(self.manager.sessions.values()))
         session_id, secret = session.session_id, session.secret
         autosave = tcad._webui_pickle_load(session.storage_dir / 'autosave.pkl.gz')
         self.request('POST', '/api/recipe/new', {'name': '临时切换'})
         self.request('POST', '/api/recipe/load', {'id': saved['id']})
+        assert_restored('named load', named_binding)
         self.assertEqual(self.recipe()[index]['step_id'], identity)
         self.assertEqual(self.request('GET', '/api/init')['result']['current_recipe'],
                          {'name': '区间草稿保存', 'id': saved['id']})
         self.request('POST', '/api/step/set', {'index': index, 'params': {'etch_distance_nm': 20}})
         tcad._webui_pickle_dump(session.storage_dir / 'autosave.pkl.gz', autosave)
         self.request('POST', '/api/load_autosave', {})
+        assert_restored('autosave load', named_binding)
         self.assertEqual(self.recipe()[index]['params']['etch_distance_nm'], 30)
         self.manager.stop()
         self.manager = tcad.WebUIServerManager(
@@ -255,6 +278,7 @@ class DepthWindowEtchHTTPTests(unittest.TestCase):
         self.manager.start()
         self.addCleanup(self.manager.stop)
         _, self.cookie = self.manager.create_session(session_id=session_id, secret=secret)
+        assert_restored('restart', named_binding)
         restored = self.recipe()[index]
         self.assertEqual(restored['step_id'], identity)
         for key, value in params.items():
