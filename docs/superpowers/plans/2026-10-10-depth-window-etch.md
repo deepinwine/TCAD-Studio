@@ -97,6 +97,8 @@ np.testing.assert_array_equal(model.grid, before)
 - [ ] preflight 不对当前最终模型执行工艺；结构相关检查在真实执行时取本步骤的输入结构，不用未来步骤的结果当参考。
 - [ ] 修复实际兼容路径的最小差异，保留普通 Etch 的物理兼容路径，不把几何百分比映射为真实速率。
 - [ ] 新端点数量保持不变；ARCHITECTURE_TARGET 记录现有 payload 扩展与对应命名测试，DECISIONS 记录区间受限几何规则。全量 AGENTS 基线、编译、grid128；小提交并两阶段审查。
+- [ ] 将区间单元专项与新增 HTTP 专项加入现有 CI 核心模块清单，同时扩展
+  `tests/test_ci_contract.py` 的必需模块断言；不增加依赖，不改变可选引擎策略。
 
 ## 任务 4：检查器与独立单位
 
