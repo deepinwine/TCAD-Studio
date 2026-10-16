@@ -85,7 +85,7 @@ the frozen-core tests when changing those fields.
 | Endpoint | Method | Request (minimal) | Response |
 | --- | --- | --- | --- |
 | `/api/health` | GET | — | JSON |
-| `/api/init` | GET | — | JSON; `result`: `recipe`、`model`、`recipe_factories`、`materials`、`demo_recipes`、`recipes`、`ui_state`、`backend_capabilities`（加法能力矩阵）；可选加法字段 `factory_templates` 为带 `parameter_specs` 的默认 Step 列表，供添加表单使用；`recipe[].parameter_specs[]` 的加法字段：`dimension`、`canonical_unit`、`display_units`、`capability_key` |
+| `/api/init` | GET | — | JSON; `result`: `recipe`、`model`、`recipe_factories`、`materials`、`demo_recipes`、`recipes`、`ui_state`、`backend_capabilities`（加法能力矩阵）；可选加法字段 `factory_templates` 为带 `parameter_specs` 的默认 Step 列表，供添加表单使用；`recipe[].parameter_specs[]` 的加法字段：`dimension`、`canonical_unit`、`display_units`、`capability_key`、`active_when`；步骤可选只读 `execution_result:{reference_z_nm:number}`，生命周期与命名 HTTP 测试见下文 |
 | `/api/status` | GET | — | JSON |
 | `/api/log` | GET | — | JSON |
 | `/api/history` | GET | — | JSON（历史清单） |
@@ -105,9 +105,9 @@ the frozen-core tests when changing those fields.
 | `/api/recipe/move` | POST | `{index, direction}` 或 `{index, to}` | JSON; `result`: step list |
 | `/api/recipe/rename-step` | POST | `{index, instance_name (1–80 字符)}` | JSON; `result`: step |
 | `/api/step/set` | POST | `{index, name?, instance_name?, enabled?, params?, loop?, group?, no_autosave?}` | JSON; `result`: step、`statuses` 列表、`warnings?`；可选 `name` 配置 detached factory candidate 并原子替换同索引，失败不改配方/状态；未提供 `instance_name` 时保留自定义标签，默认类型名随类型更新；旧不带 `name` 的参数编辑保持兼容 |
-| `/api/run/step` | POST | `{index}` | JSON；失败为平面结构化载荷（`step_index`、`instance_name`、`step_type`、`parameter_path`、`error`、`error_type`、`suggestion`、`rolled_back`） |
-| `/api/run/all` | POST | `{}` | JSON |
-| `/api/run/to`（dispatcher 别名 `/api/run/until`） | POST | `{index}` | JSON |
+| `/api/run/step` | POST | `{index}` | JSON；成功 `result.recipe?` 为权威步骤列表，含可选只读 `execution_result:{reference_z_nm:number}`；失败为平面结构化载荷（`step_index`、`instance_name`、`step_type`、`parameter_path`、`error`、`error_type`、`suggestion`、`rolled_back`）；结果由 `DepthWindowEtchHTTPTests::test_execution_reference_result_is_real_optional_and_never_stale` 覆盖 |
+| `/api/run/all` | POST | `{}` | JSON；成功 `result.recipe?` 与上述步骤列表契约相同，结果由 `DepthWindowEtchHTTPTests::test_run_all_and_to_deliver_reference_in_authoritative_recipe` 覆盖 |
+| `/api/run/to`（dispatcher 别名 `/api/run/until`） | POST | `{index}` | JSON；成功 `result.recipe?` 与上述步骤列表契约相同，结果由 `DepthWindowEtchHTTPTests::test_run_all_and_to_deliver_reference_in_authoritative_recipe` 覆盖 |
 | `/api/undo` | POST | `{}` | JSON; `result.undone`、`model`、`log` |
 | `/api/redo` | POST | `{}` | JSON; `result.redone`、`model`、`log` |
 | `/api/reset` | POST | `{}` | JSON |
@@ -149,12 +149,21 @@ optional 数值的默认值与未设置参数保留 JSON `null`。旧响应缺�
 
 条件参数元数据：M2 的 `active_when` 与 M4 的 `activeWhen` 是控制参数到预期值的映射，
 所有条件同时满足（AND）时该字段才活动；省略的控制参数使用工厂 `ParameterSpec.default`。
+React 将其严格解析为 `ParameterSpecView.activeWhen`，校验映射、已知控制字段与合法 choice；
+显式 `null` 不当作缺省值。无此元数据的旧服务保留原有字段与保存行为。
 例如 Structure Etch 的 `start_depth_nm` 仅在 `etch_mode="Depth window"` 且
 `depth_reference="Opening plane"` 时活动。非活动字段的草稿值保留在配方中，但不校验、
 不参与执行；未知参数仍拒绝，不因字段非活动而放行。M2 真实 HTTP 元数据与草稿保留由
 `tests/test_depth_window_etch.py::DepthWindowMetadataHTTPTests` 覆盖，M4 视图透传及候选编辑
 原子性由同文件的 `DepthWindowEtchTests::test_m4_real_view_and_edits_use_active_configuration_atomically`
 覆盖。
+
+React 的 ParameterPanel、添加表单与类型替换候选共用活动字段判断；条件步骤的同一次
+`set_step` 原子保存会携带当前已知字段的所有草稿。仅最终活动配置参与校验，合法长度
+提交 canonical nm，非活动非法原始草稿仍随配方保存。响应按各字段 sequence 确认，
+不丢请求期间的新草稿；两端区间与控制字段不拆成相互矛盾的中间候选。前端不解析几何。
+命名测试：`frontend/src/components/DepthWindowParameters.test.tsx`、
+`frontend/src/api/depthWindowSchemas.test.ts`。
 
 深度区间刻蚀加法参数（ADR-031）：沿用 `Structure Etch` 的 `params` 对象、
 `/api/recipe/add`、`/api/step/set`、`/api/recipe/import` 和既有 run 端点；不增加
@@ -184,6 +193,19 @@ worker 覆盖 add/set/import/run、相对/固定带的 0%/50% 逐体素独立面
 其中 `test_import_and_edit_do_not_resolve_final_or_future_geometry` 验证 300 nm 孔的
 实际步骤输入，`test_inactive_drafts_roundtrip_named_autosave_and_restart` 验证恢复链路；
 `tests/test_depth_window_etch.py` 与该 HTTP 模块都列入 CI Core backend tests。
+
+执行结果只读加法：当前 worker 的 Structure Etch 在 `Depth window` / `Opening plane`
+单次真实解析并成功提交后，将 `last_metrics.reference_z_nm` 以可选步骤字段
+`execution_result:{reference_z_nm:number}` 发布。客户端映射为
+`StepView.executionResult.referenceZNm`；此值来自该步骤实际输入，不读取当前最终模型。
+仅 `done` 且模式匹配的步骤可发布；不写入 Recipe、输入参数或保存文件，也不增加端点。
+修改前缀、开始执行前缀或执行失败清空受影响的 Structure Etch 结果；复制、重载、
+undo/redo、Timeline 或缓存快照恢复不恢复此诊断，缺少可信结果即省略。
+React 对本步骤或任何前缀草稿隐藏旧值；旧服务、恢复、失败均明确显示未解析，
+Fixed Z 显示无需孔口参考。旧物理 Etch 的 `last_metrics` 不受此清理影响。
+HTTP 生命周期由同模块的 `test_execution_reference_result_is_real_optional_and_never_stale`、
+`test_reference_result_clears_for_timeline_failure_fixed_z_and_reload` 与
+`test_run_all_and_to_deliver_reference_in_authoritative_recipe` 覆盖。
 
 步骤来源加法字段：真实 Recipe step blob 的 `step_id` 是持久化 UUID；旧文件缺失或非法
 identity 时生成新值，同配方重复 identity 保留首个并为后续步骤生成新值。改参数、改类型、

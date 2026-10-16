@@ -265,3 +265,8 @@ Rules:
   不发布部分候选、来源或成功快照，不覆盖有效保存；来源绑定检查不放宽。
 - HTTP 参数与命名测试见 `docs/ARCHITECTURE_TARGET.md`，几何和兼容链路分别由
   `tests/test_depth_window_etch.py`、`tests/test_depth_window_etch_http.py` 覆盖并进入 CI。
+- 只读孔口参考 Z 复用 Structure Etch 的临时 `last_metrics`，仅在真实执行的候选
+  提交成功后发布到既有步骤响应的可选 `execution_result`；不写入 Recipe，不二次
+  解析几何。前缀变更、失败与快照／历史／重载恢复均保守失效；无可信结果明确未解析。
+  旧物理 Etch 的指标保持原生命周期。React 条件步骤沿用同一次原子 `set_step`
+  保存已知草稿，只校验最终活动字段，保留隐藏原始草稿和逐字段显示单位偏好。

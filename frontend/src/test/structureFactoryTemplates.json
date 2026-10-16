@@ -236,7 +236,15 @@
     "params": {
       "material": "Silicon Dioxide",
       "depth_nm": 100,
-      "sidewall_angle_deg": 90
+      "sidewall_angle_deg": 90,
+      "etch_mode": "Standard",
+      "depth_reference": "Opening plane",
+      "start_depth_nm": 100,
+      "end_depth_nm": 200,
+      "lower_z_nm": 100,
+      "upper_z_nm": 200,
+      "etch_distance_nm": 30,
+      "directionality_percent": 0
     },
     "parameter_specs": [
       {
@@ -435,7 +443,10 @@
           "nm",
           "µm"
         ],
-        "capability_key": null
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Standard"
+        }
       },
       {
         "key": "sidewall_angle_deg",
@@ -455,7 +466,204 @@
           "°",
           "rad"
         ],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Standard"
+        }
+      },
+      {
+        "key": "etch_mode",
+        "label": "Etch mode",
+        "type": "enum",
+        "default": "Standard",
+        "minimum": null,
+        "maximum": null,
+        "choices": [
+          [
+            "Standard",
+            "Standard"
+          ],
+          [
+            "Depth window",
+            "Depth window"
+          ]
+        ],
+        "decimals": 2,
+        "step": null,
+        "units": "",
+        "tooltip": "",
+        "dimension": null,
+        "canonical_unit": null,
+        "display_units": [],
         "capability_key": null
+      },
+      {
+        "key": "depth_reference",
+        "label": "Depth reference",
+        "type": "enum",
+        "default": "Opening plane",
+        "minimum": null,
+        "maximum": null,
+        "choices": [
+          [
+            "Opening plane",
+            "Opening plane"
+          ],
+          [
+            "Fixed Z",
+            "Fixed Z"
+          ]
+        ],
+        "decimals": 2,
+        "step": null,
+        "units": "",
+        "tooltip": "",
+        "dimension": null,
+        "canonical_unit": null,
+        "display_units": [],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window"
+        }
+      },
+      {
+        "key": "start_depth_nm",
+        "label": "Start depth",
+        "type": "float",
+        "default": 100,
+        "minimum": 0,
+        "maximum": null,
+        "choices": null,
+        "decimals": 2,
+        "step": null,
+        "units": "nm",
+        "tooltip": "",
+        "dimension": "length",
+        "canonical_unit": "nm",
+        "display_units": [
+          "nm",
+          "µm"
+        ],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window",
+          "depth_reference": "Opening plane"
+        }
+      },
+      {
+        "key": "end_depth_nm",
+        "label": "End depth",
+        "type": "float",
+        "default": 200,
+        "minimum": 0,
+        "maximum": null,
+        "choices": null,
+        "decimals": 2,
+        "step": null,
+        "units": "nm",
+        "tooltip": "",
+        "dimension": "length",
+        "canonical_unit": "nm",
+        "display_units": [
+          "nm",
+          "µm"
+        ],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window",
+          "depth_reference": "Opening plane"
+        }
+      },
+      {
+        "key": "lower_z_nm",
+        "label": "Lower Z",
+        "type": "float",
+        "default": 100,
+        "minimum": null,
+        "maximum": null,
+        "choices": null,
+        "decimals": 2,
+        "step": null,
+        "units": "nm",
+        "tooltip": "",
+        "dimension": "length",
+        "canonical_unit": "nm",
+        "display_units": [
+          "nm",
+          "µm"
+        ],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window",
+          "depth_reference": "Fixed Z"
+        }
+      },
+      {
+        "key": "upper_z_nm",
+        "label": "Upper Z",
+        "type": "float",
+        "default": 200,
+        "minimum": null,
+        "maximum": null,
+        "choices": null,
+        "decimals": 2,
+        "step": null,
+        "units": "nm",
+        "tooltip": "",
+        "dimension": "length",
+        "canonical_unit": "nm",
+        "display_units": [
+          "nm",
+          "µm"
+        ],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window",
+          "depth_reference": "Fixed Z"
+        }
+      },
+      {
+        "key": "etch_distance_nm",
+        "label": "Etch distance",
+        "type": "float",
+        "default": 30,
+        "minimum": 0,
+        "maximum": null,
+        "choices": null,
+        "decimals": 2,
+        "step": null,
+        "units": "nm",
+        "tooltip": "",
+        "dimension": "length",
+        "canonical_unit": "nm",
+        "display_units": [
+          "nm",
+          "µm"
+        ],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window"
+        }
+      },
+      {
+        "key": "directionality_percent",
+        "label": "Directionality",
+        "type": "float",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 100,
+        "choices": null,
+        "decimals": 2,
+        "step": null,
+        "units": "%",
+        "tooltip": "",
+        "dimension": null,
+        "canonical_unit": null,
+        "display_units": [],
+        "capability_key": null,
+        "active_when": {
+          "etch_mode": "Depth window"
+        }
       }
     ]
   },

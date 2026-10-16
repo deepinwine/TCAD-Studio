@@ -1,5 +1,6 @@
 import {TcadApiError} from '../api/client';
 import {visibleSteps} from '../components/processCatalog';
+import {draftIsActive} from '../components/parameterActivity';
 import {stepVisibilityReason, validHiddenSteps} from '../viewer/stepVisibility';
 import type {DisplayManifestView} from '../api/types';
 import type {
@@ -74,6 +75,7 @@ export type AppAction =
   | {type: 'candidate/pending'; indices: number[]}
   | {type: 'step/typeReplaced'; payload: SetStepView}
   | {type: 'parameter/pendingSaves'; count: number}
+  | {type: 'parameter/batchSaved'; index: number; sequences: Record<string, number>; payload: SetStepView}
   | {type: 'parameter/displayChanged'; index: number; key: string; rawValue: string | boolean; displayUnit: string}
   | {type: 'bootstrap/started'}
   | {type: 'bootstrap/succeeded'; payload: InitView}
@@ -154,8 +156,8 @@ export function parameterDraftKey(index: number, key: string): string {
   return `${index}:${key}`;
 }
 
-export function hasUnsavedDrafts(state: Pick<AppState, 'drafts'>): boolean {
-  return Object.keys(state.drafts).length > 0;
+export function hasUnsavedDrafts(state: Pick<AppState, 'drafts'> & Partial<Pick<AppState, 'recipe'>>): boolean {
+  return Object.keys(state.drafts).some(key => !state.recipe || draftIsActive(state.recipe, state.drafts, key));
 }
 
 function withoutKey<T>(source: Record<string, T>, key: string): Record<string, T> {
@@ -314,6 +316,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
     }
+    case 'parameter/batchSaved': {
+      const drafts = {...state.drafts}; const parameterErrors = {...state.parameterErrors};
+      Object.entries(action.sequences).forEach(([key, sequence]) => {
+        if (drafts[key]?.sequence === sequence) delete drafts[key];
+        if (parameterErrors[key]?.sequence === sequence) delete parameterErrors[key];
+      });
+      return {...state, recipe: applyStatuses(state.recipe, action.payload.step, action.payload.statuses), drafts, parameterErrors};
+    }
     case 'parameter/saveFailed': {
       const draftKey = parameterDraftKey(action.index, action.key);
       if (state.drafts[draftKey]?.sequence !== action.sequence) return state;
@@ -342,7 +352,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         recipe: updateStepRuntimeStatus(
-          state.recipe,
+          action.payload.recipe ?? state.recipe,
           index,
           action.payload.runtimeStatus,
         ),

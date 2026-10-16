@@ -11,6 +11,8 @@ import {
 } from 'react';
 import {TcadApiError} from '../api/client';
 import {isInitializer} from '../components/processCatalog';
+import {draftIsActive, parameterIsActive, parameterValues} from '../components/parameterActivity';
+import {validateParameter} from '../components/parameterValidation';
 import type {
   StepView, MaskAssetApplyView,
   RecipeLoadView,RunView, TcadApi} from '../api/types';
@@ -111,6 +113,24 @@ function isAbortError(error: unknown, signal: AbortSignal): boolean {
     && error !== null
     && 'name' in error
     && (error as {name?: unknown}).name === 'AbortError';
+}
+
+function invalidActiveConfiguration(state: AppState): boolean {
+  const unknownDraft = Object.keys(state.drafts).some(key => !state.recipe.some(step =>
+    key.startsWith(`${step.index}:`) && (step.parameterSpecs.length === 0
+      || step.parameterSpecs.some(spec => key === parameterDraftKey(step.index, spec.key)))));
+  if (unknownDraft) return true;
+  if (Object.entries(state.drafts).some(([key, draft]) => draftIsActive(state.recipe, state.drafts, key) && draft.validation.status !== 'valid')) return true;
+  return state.recipe.some(step => {
+    if (!step.parameterSpecs.some(spec => spec.activeWhen !== undefined)) return false;
+    const values = parameterValues(step, state.drafts);
+    return step.parameterSpecs.some(spec => {
+      if (!parameterIsActive(spec, step.parameterSpecs, values)) return false;
+      const value = spec.key === 'material' && typeof values[spec.key] === 'number'
+        ? state.materials.find(material => material.id === values[spec.key])?.name ?? values[spec.key] : values[spec.key];
+      return !validateParameter(spec, value).ok;
+    });
+  });
 }
 
 export function AppStateProvider({api, children}: AppStateProviderProps) {
@@ -237,7 +257,9 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     if (!mountedRef.current || mutationGateRef.current !== null || (applyingRef.current && !applying)) return Promise.resolve();
     const draftKey = parameterDraftKey(index, key);
     const draft = stateRef.current.drafts[draftKey];
-    if (draft === undefined || draft.validation.status !== 'valid') return Promise.resolve();
+    const step = stateRef.current.recipe.find(step => step.index === index);
+    const conditional = step?.parameterSpecs.some(spec => spec.activeWhen !== undefined) ?? false;
+    if (draft === undefined || (!conditional && draft.validation.status !== 'valid')) return Promise.resolve();
     if (savingRef.current[draftKey] === draft.sequence) return Promise.resolve();
 
     savingRef.current[draftKey] = draft.sequence;
@@ -248,6 +270,26 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
       .catch(() => undefined)
       .then(async () => {
         if (!mountedRef.current || controller.signal.aborted) return;
+        if (conditional) {
+          const current = stateRef.current;
+          const selected = current.recipe.find(step => step.index === index);
+          const entries = Object.entries(current.drafts).filter(([draftKey]) => draftKey.startsWith(`${index}:`));
+          if (!entries.length) return;
+          if (!selected || invalidActiveConfiguration({...current, recipe: [selected], drafts: Object.fromEntries(entries)})) {
+            dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {status: 400, code: 'invalid_draft'})});
+            return;
+          }
+          const sequences = Object.fromEntries(entries.map(([key, draft]) => [key, draft.sequence]));
+          const params = Object.fromEntries(entries.map(([key, draft]) => [key.slice(key.indexOf(':') + 1), draft.value]));
+          try {
+            const payload = await api.setStep({index, params}, controller.signal);
+            if (mountedRef.current && !controller.signal.aborted) dispatch({type: 'parameter/batchSaved', index, sequences, payload});
+          } catch (error) {
+            if (!mountedRef.current || isAbortError(error, controller.signal)) return;
+            entries.forEach(([draftKey, draft]) => dispatch({type: 'parameter/saveFailed', index, key: draftKey.slice(draftKey.indexOf(':') + 1), sequence: draft.sequence, error: normalizeError(error)}));
+          }
+          return;
+        }
         try {
           const payload = await api.setStep(
             {index, params: {[key]: draft.value}},
@@ -288,9 +330,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const beginMutation = useCallback((operation: Exclude<ActiveMutation, null>): boolean => {
     if (candidateIndicesRef.current.size) return false;
     if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null || pendingSaveCountRef.current > 0) return false;
-    const invalidDraft = Object.values(stateRef.current.drafts)
-      .find(draft => draft.validation.status === 'invalid');
-    if (invalidDraft !== undefined) {
+    if (invalidActiveConfiguration(stateRef.current)) {
       dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {
         status: 400,
         code: 'invalid_draft',
@@ -394,7 +434,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const applyAndRunTo = useCallback(async (index = stateRef.current.selectedStepIndex ?? undefined) => {
     if (candidateIndicesRef.current.size) return;
     if (index === undefined || !mountedRef.current || applyingRef.current || mutationGateRef.current !== null) return;
-    if (Object.values(stateRef.current.drafts).some(draft => draft.validation.status !== 'valid')) {
+    if (invalidActiveConfiguration(stateRef.current)) {
       dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {status: 400, code: 'invalid_draft'})});
       return;
     }
@@ -405,7 +445,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
       if (Object.keys(stateRef.current.parameterErrors).length > 0) return;
       const drafts = Object.entries(stateRef.current.drafts);
       for (const [draftKey, draft] of drafts) {
-        if (draft.validation.status !== 'valid') return;
+        if (draft.validation.status !== 'valid' && draftIsActive(stateRef.current.recipe, stateRef.current.drafts, draftKey)) return;
         const delimiter = draftKey.indexOf(':');
         await saveParameterInternal(Number(draftKey.slice(0, delimiter)), draftKey.slice(delimiter + 1), true);
         if (Object.keys(stateRef.current.parameterErrors).length > 0) return;
@@ -567,7 +607,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const selectedStepIndexForOps = () => stateRef.current.selectedStepIndex;
   const replaceStep = useCallback(async (index: number, name: string, configuration: {params: Record<string, unknown>; instanceName?: string}): Promise<boolean> => {
     if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null) return false;
-    if (Object.values(stateRef.current.drafts).some(draft => draft.validation.status !== 'valid')) {
+    if (invalidActiveConfiguration(stateRef.current)) {
       dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {status: 400, code: 'invalid_draft'})});
       return false;
     }

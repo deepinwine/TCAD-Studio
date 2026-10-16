@@ -20562,7 +20562,12 @@ class StructureGeometryStep(ProcessStep):
 
     def execute(self, model: ProcessModel) -> str:
         from structure_cad.operations import construct
-        changed = construct(model, self.operation, step_id=self.step_id, **self.params)
+        metrics: Dict[str, Any] = {}
+        if self.operation == "Etch":
+            self.last_metrics = {}
+        changed = construct(model, self.operation, step_id=self.step_id, execution_metrics=metrics, **self.params)
+        if self.operation == "Etch":
+            self.last_metrics = metrics
         return f"{self.name}: {changed} voxels constructed"
 
 
@@ -37644,6 +37649,21 @@ def _webui_worker_main(
     step_runtime_statuses = _normalize_step_statuses([], len(steps))
     step_runtime_errors: Dict[int, Dict[str, Any]] = {}
 
+    def _clear_structure_etch_results(start_index: int = 0) -> None:
+        for step in steps[max(0, int(start_index)):]:
+            if isinstance(step, StructureEtchStep):
+                step.last_metrics = {}
+
+    def _structure_etch_execution_result(step: ProcessStep, status: str) -> Dict[str, Any]:
+        if (not isinstance(step, StructureEtchStep) or status != "done"
+                or step.params.get("etch_mode") != "Depth window"
+                or step.params.get("depth_reference", "Opening plane") != "Opening plane"):
+            return {}
+        reference = getattr(step, "last_metrics", {}).get("reference_z_nm")
+        if isinstance(reference, (int, float)) and not isinstance(reference, bool) and math.isfinite(reference):
+            return {"execution_result": {"reference_z_nm": float(reference)}}
+        return {}
+
     def _serialize_recipe_for_client() -> List[Dict[str, Any]]:
         nonlocal step_runtime_statuses
         step_runtime_statuses = _normalize_step_statuses(step_runtime_statuses, len(steps))
@@ -37651,6 +37671,7 @@ def _webui_worker_main(
         for index, step in enumerate(steps):
             blob = _webui_serialize_step(step)
             blob["runtime_status"] = step_runtime_statuses[index]
+            blob.update(_structure_etch_execution_result(step, step_runtime_statuses[index]))
             if step_runtime_statuses[index] == "error" and index in step_runtime_errors:
                 blob["runtime_error"] = dict(step_runtime_errors[index])
             result.append(blob)
@@ -37661,6 +37682,7 @@ def _webui_worker_main(
         step_runtime_statuses = _normalize_step_statuses(step_runtime_statuses, len(steps))
         blob = _webui_serialize_step(steps[index])
         blob["runtime_status"] = step_runtime_statuses[index]
+        blob.update(_structure_etch_execution_result(steps[index], step_runtime_statuses[index]))
         if step_runtime_statuses[index] == "error" and index in step_runtime_errors:
             blob["runtime_error"] = dict(step_runtime_errors[index])
         return blob
@@ -37669,11 +37691,13 @@ def _webui_worker_main(
         nonlocal step_runtime_statuses, step_runtime_errors
         step_runtime_statuses = _normalize_step_statuses([], len(steps))
         step_runtime_errors = {}
+        _clear_structure_etch_results()
 
     def _invalidate_step_runtime_statuses(start_index: int) -> None:
         nonlocal step_runtime_statuses, step_runtime_errors
         step_runtime_statuses = _invalidate_step_statuses(step_runtime_statuses, start_index, len(steps))
         start = max(0, _step_runtime_int(start_index))
+        _clear_structure_etch_results(start)
         step_runtime_errors = {
             int(index): dict(error)
             for index, error in step_runtime_errors.items()
@@ -59000,6 +59024,7 @@ def _webui_worker_main(
 
     def _restore_history_metadata(entry: Any) -> None:
         nonlocal step_runtime_statuses, step_runtime_errors, timeline_current_index, current_recipe_name
+        _clear_structure_etch_results()
         if not isinstance(entry, dict):
             _reset_step_runtime_statuses()
             timeline_current_index = -1
@@ -59110,6 +59135,7 @@ def _webui_worker_main(
     ) -> Dict[str, Any]:
         """Abort or retain a pending undo token and build the worker error payload."""
         nonlocal model_revision, step_runtime_errors
+        _clear_structure_etch_results(step_index)
         _set_step_runtime_status(step_index, "error")
         if undo_token is not None:
             if transaction.get("rolled_back") or transaction.get("snapshot_error"):
@@ -59145,6 +59171,7 @@ def _webui_worker_main(
 
     def _begin_step_execution(step: ProcessStep, step_index: int) -> Dict[str, Any]:
         """Run non-mutating preflight and allocate an uncommitted undo snapshot."""
+        _clear_structure_etch_results(step_index)
         try:
             if isinstance(step, ExposureStep):
                 step.bind_mask_asset_service(mask_asset_service)
@@ -59236,6 +59263,7 @@ def _webui_worker_main(
         """Restore a cache checkpoint, then retire known deletions and validate binding."""
         from structure_cad.display_provenance import validate_source_bound_identities
         model.restore_state(snapshot, **kwargs)
+        _clear_structure_etch_results()
         for identity in step_cache_removed_step_ids:
             model.display_provenance.forget_step(identity)
         validate_source_bound_identities(
@@ -72626,6 +72654,7 @@ def _webui_worker_main(
                             "description": desc,
                             "result": result_str,
                             "runtime_status": step_runtime_statuses[idx],
+                            "recipe": _serialize_recipe_for_client(),
                             "model_revision": int(model_revision),
                             "model": _webui_model_summary(model),
                             "log": model.history[-250:],
@@ -72645,6 +72674,8 @@ def _webui_worker_main(
                         pass
                     resp = {"ok": False, "error": str(exc)}
                 if isinstance(resp, dict):
+                    if resp.get("ok") and isinstance(resp.get("result"), dict):
+                        resp["result"]["recipe"] = _serialize_recipe_for_client()
                     resp["rid"] = rid
                 conn.send(resp)
                 continue
@@ -72670,6 +72701,8 @@ def _webui_worker_main(
                 except Exception:
                     pass
                 if isinstance(resp, dict):
+                    if resp.get("ok") and isinstance(resp.get("result"), dict):
+                        resp["result"]["recipe"] = _serialize_recipe_for_client()
                     resp["rid"] = rid
                 conn.send(resp)
                 continue

@@ -26,6 +26,14 @@ export function presentStep(step: StepView, materials: MaterialView[], locale: L
   const english = locale === 'en';
   const label = copy[english ? 1 : 0];
   const material = materialLabel(step.params.material, materials);
+  if (structure && operation === 'Etch' && step.params.etch_mode === 'Depth window') {
+    const fixed = step.params.depth_reference === 'Fixed Z';
+    const lower = step.params[fixed ? 'lower_z_nm' : 'start_depth_nm'] ?? 100;
+    const upper = step.params[fixed ? 'upper_z_nm' : 'end_depth_nm'] ?? 200;
+    const summary = [label, material, fixed ? 'Z' : english ? 'Opening depth' : '孔口深度', `${lower}–${upper} nm`, `${step.params.etch_distance_nm ?? 30} nm`, `${step.params.directionality_percent ?? 0}%`].join(' · ');
+    return {title: step.instanceName && step.instanceName !== step.name ? step.instanceName : summary, type: label,
+      description: (english ? en : zhCN)['cad.windowHelp']};
+  }
   const key = operation === 'Doping' ? 'depth_nm' : operation === 'Etch' ? (structure ? 'depth_nm' : 'time') : operation === 'Fill' || operation === 'Planarize' ? 'height_nm' : operation === 'Pattern' ? 'critical_dimension' : 'thickness_nm';
   const value = step.params[key] ?? (operation === 'Deposit' ? step.params.thickness : undefined);
   const legacyEtch = !structure && operation === 'Etch';

@@ -21,6 +21,7 @@ export interface ParameterSpecView {
   canonicalUnit?: string;
   displayUnits?: string[];
   capabilityKey?: string;
+  activeWhen?: Record<string, ParameterChoiceValue>;
 }
 
 export interface StepView {
@@ -34,6 +35,7 @@ export interface StepView {
   params: Record<string, unknown>;
   parameterSpecs: ParameterSpecView[];
   runtimeStatus: RuntimeStatus;
+  executionResult?: {referenceZNm: number};
 }
 
 export interface ModelSummaryView {

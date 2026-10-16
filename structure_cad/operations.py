@@ -178,7 +178,7 @@ def commit(model, candidate, operation, *, step_id=None, additions=None):
     return int(changed.sum())
 
 
-def construct(model, operation, *, step_id=None, **params):
+def construct(model, operation, *, step_id=None, execution_metrics=None, **params):
     top(model)
     if operation == 'Etch':
         from structure_cad.depth_window_etch import parse_window_params, resolve_window, window_etch_candidate
@@ -186,7 +186,10 @@ def construct(model, operation, *, step_id=None, **params):
         if parsed.etch_mode == 'Depth window':
             resolved = resolve_window(model, parsed)
             candidate = window_etch_candidate(model, resolved)
-            return commit(model, candidate, 'Structure Etch Depth window', step_id=step_id, additions=None)
+            changed = commit(model, candidate, 'Structure Etch Depth window', step_id=step_id, additions=None)
+            if execution_metrics is not None and resolved.reference_z_nm is not None:
+                execution_metrics['reference_z_nm'] = float(resolved.reference_z_nm)
+            return changed
     if operation == 'Doping':
         return dope(model, params)
     candidate = model.grid.copy()

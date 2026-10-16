@@ -293,6 +293,12 @@ function parseParameterSpec(value: unknown, path: string): ParameterSpecView {
   if (dimension !== undefined) parsed.dimension = dimension;
   if (canonicalUnit !== undefined) parsed.canonicalUnit = canonicalUnit;
   if (capabilityKey !== undefined) parsed.capabilityKey = capabilityKey;
+  if (source.active_when !== undefined && source.active_when !== null) {
+    parsed.activeWhen = Object.fromEntries(Object.entries(requireRecord(source.active_when, `${path}.active_when`)).map(([key, value]) => {
+      if (!key.trim()) throw new ApiContractError(`${path}.active_when`, 'nonempty controller key');
+      return [key, parseChoiceValue(value, `${path}.active_when.${key}`)];
+    }));
+  }
   if (source.display_units !== undefined && source.display_units !== null) {
     parsed.displayUnits = parseStringArray(source.display_units, `${path}.display_units`);
   }
@@ -316,6 +322,18 @@ function parseParameterSpec(value: unknown, path: string): ParameterSpecView {
 
 function parseStep(value: unknown, path: string, index: number): StepView {
   const source = requireRecord(value, path);
+  const executionResult = source.execution_result === undefined ? undefined : {
+    referenceZNm: requireFiniteNumber(requireRecord(source.execution_result, `${path}.execution_result`).reference_z_nm, `${path}.execution_result.reference_z_nm`),
+  };
+  const parameterSpecs = requireArray(source.parameter_specs, `${path}.parameter_specs`).map(
+    (spec, specIndex) => parseParameterSpec(spec, `${path}.parameter_specs[${specIndex}]`),
+  );
+  parameterSpecs.forEach((spec, specIndex) => Object.entries(spec.activeWhen ?? {}).forEach(([key, value]) => {
+    const controller = parameterSpecs.find(candidate => candidate.key === key);
+    if (!controller || controller === spec || (controller.choices && !controller.choices.some(([choice]) => Object.is(choice, value)))) {
+      throw new ApiContractError(`${path}.parameter_specs[${specIndex}].active_when.${key}`, 'known controller and legal value');
+    }
+  }));
   return {
     index,
     ...(source.step_id === undefined ? {} : {stepId: requireStepIdentity(source.step_id, `${path}.step_id`)}),
@@ -325,10 +343,9 @@ function parseStep(value: unknown, path: string, index: number): StepView {
     loop: optionalString(source.loop, `${path}.loop`) ?? '',
     enabled: requireBoolean(source.enabled, `${path}.enabled`),
     params: requireRecord(source.params, `${path}.params`),
-    parameterSpecs: requireArray(source.parameter_specs, `${path}.parameter_specs`).map(
-      (spec, specIndex) => parseParameterSpec(spec, `${path}.parameter_specs[${specIndex}]`),
-    ),
+    parameterSpecs,
     runtimeStatus: parseRuntimeStatus(source.runtime_status),
+    ...(executionResult === undefined ? {} : {executionResult}),
   };
 }
 
@@ -647,6 +664,7 @@ export function parseHistoryEnvelope(
 export function parseRunEnvelope(payload: unknown): RunView {
   const result = requireOkResult(payload);
   const parsed: RunView = {};
+  if (result.recipe !== undefined) parsed.recipe = parseRecipe(result.recipe, 'result.recipe');
   const modelRevision = optionalInteger(result.model_revision, 'result.model_revision', 0);
   if (modelRevision !== undefined) parsed.modelRevision = modelRevision;
   if (result.model !== undefined) parsed.model = parseModel(result.model, 'result.model');

@@ -71,6 +71,71 @@ class DepthWindowEtchHTTPTests(unittest.TestCase):
         })['result']
         return len(steps) - 1
 
+    def test_execution_reference_result_is_real_optional_and_never_stale(self):
+        self.build_hole()
+        index = self.add_window()
+        self.assertNotIn('execution_result', self.recipe()[index])
+
+        with patch.object(depth_window_etch, 'resolve_window', wraps=depth_window_etch.resolve_window) as resolve:
+            run = self.request('POST', '/api/run/step', {'index': index})['result']
+        self.assertEqual(resolve.call_count, 1)
+        self.assertEqual(run.get('recipe', [{}] * (index + 1))[index].get('execution_result'), {'reference_z_nm': 395.0})
+        self.assertEqual(self.recipe()[index]['execution_result'], {'reference_z_nm': 395.0})
+        status, _, raw = self._request(self.manager.url, self.cookie, 'GET', '/api/recipe/export?scope=current', None)
+        self.assertEqual(status, 200)
+        exported = json.loads(raw)
+        self.assertNotIn('execution_result', exported['steps_full'][index])
+        self.request('POST', '/api/recipe/import', {'recipe': exported})
+        self.assertNotIn('execution_result', self.recipe()[index])
+        result = self.request('POST', '/api/run/to', {'index': index})['result']
+        self.assertEqual(result['recipe'][index]['execution_result'], {'reference_z_nm': 395.0})
+        self.request('POST', '/api/run/to', {'index': index})
+        # A cache checkpoint may retain an exact in-memory result or discard it,
+        # but must never invent a different reference from the final model.
+        self.assertIn(self.recipe()[index].get('execution_result'), (None, {'reference_z_nm': 395.0}))
+        copied = self.request('POST', '/api/recipe/duplicate', {'index': index})['result']
+        self.assertNotIn('execution_result', copied[index + 1])
+        self.request('POST', '/api/recipe/remove', {'index': index + 1})
+        self.request('POST', '/api/step/set', {'index': 0, 'params': {'thickness_nm': 390}})
+        self.assertNotIn('execution_result', self.recipe()[index])
+        self.request('POST', '/api/undo', {})
+        self.assertNotIn('execution_result', self.recipe()[index])
+        self.request('POST', '/api/redo', {})
+        self.assertNotIn('execution_result', self.recipe()[index])
+
+    def test_run_all_and_to_deliver_reference_in_authoritative_recipe(self):
+        for path in ('/api/run/all', '/api/run/to'):
+            with self.subTest(path=path):
+                recipe = self.hole_recipe()
+                recipe['steps_full'].append({'name': 'Structure Etch', 'params': self.window()})
+                self.request('POST', '/api/recipe/import', {'recipe': recipe})
+                index = len(recipe['steps_full']) - 1
+                result = self.request('POST', path, {'index': index})['result']
+                self.assertEqual(result.get('recipe', [{}] * (index + 1))[index].get('execution_result'), {'reference_z_nm': 395.0})
+                cached = self.request('POST', path, {'index': index})['result']
+                self.assertIn('recipe', cached)
+                self.assertNotIn('execution_result', cached['recipe'][index])
+
+    def test_reference_result_clears_for_timeline_failure_fixed_z_and_reload(self):
+        self.build_hole()
+        index = self.add_window()
+        self.request('POST', '/api/run/step', {'index': index})
+        self.assertEqual(self.recipe()[index].get('execution_result'), {'reference_z_nm': 395.0})
+        self.request('POST', '/api/timeline/restore', {'index': index})
+        self.assertNotIn('execution_result', self.recipe()[index])
+        self.request('POST', '/api/step/set', {'index': index, 'params': {'directionality_percent': 100}})
+        failure = self.request('POST', '/api/run/step', {'index': index}, ok=False)
+        self.assertFalse(failure['ok'])
+        self.assertNotIn('execution_result', self.recipe()[index])
+        self.request('POST', '/api/step/set', {'index': index, 'params': {'directionality_percent': 0, 'depth_reference': 'Fixed Z', 'lower_z_nm': 195, 'upper_z_nm': 295}})
+        self.request('POST', '/api/run/step', {'index': index})
+        self.assertNotIn('execution_result', self.recipe()[index])
+        status, _, raw = self._request(self.manager.url, self.cookie, 'GET', '/api/recipe/export?scope=current', None)
+        self.assertEqual(status, 200)
+        saved = json.loads(raw)
+        self.request('POST', '/api/recipe/import', {'recipe': saved})
+        self.assertNotIn('execution_result', self.recipe()[index])
+
     def expected(self, grid, opened, percent=0):
         # Expected band and reference are fixed by this fixture, not resolved by
         # the implementation under test: top of z=39 is 395 nm, not the floor.

@@ -15,6 +15,8 @@ import {toCanonical, fromCanonical, formatDisplayValue, type DisplayUnit} from '
 import {conversionSpec} from '../units/parameterUnits';
 import {StepTypeEditor} from './StepTypeEditor';
 import {isInitializer} from './processCatalog';
+import {draftIsActive, parameterIsActive, parameterValues} from './parameterActivity';
+import {parameterChoiceLabel} from './parameterCopy';
 
 interface ParameterPanelProps {
   step: StepView | null;
@@ -194,7 +196,7 @@ function ParameterControl({
       >
         <option value="" disabled>{t('parameter.choicePlaceholder')}</option>
         {spec.choices?.map(([value, label], index) => (
-          <option key={index} value={String(index)}>{label || safeText(value, t)}</option>
+          <option key={index} value={String(index)}>{parameterChoiceLabel(spec.key, value, label || safeText(value, t), t)}</option>
         ))}
       </select>
     );
@@ -230,6 +232,12 @@ function ParameterControl({
 
   const numeric = spec.type === 'float' || spec.type === 'int' || spec.type === 'integer';
   return (
+    <>
+    {spec.key === 'directionality_percent' && <>
+      <input type="range" min="0" max="100" step="any" aria-label={t('cad.directionality_percent')} value={Number.isFinite(Number(displayValue)) ? Number(displayValue) : 0} {...accessibility}
+        onChange={event => onUpdate(event.currentTarget.value, event.currentTarget.value)} onBlur={onFlush} onKeyDown={handleKeyDown} />
+      <small>{t('cad.directionalityEndpoints')}</small>
+    </>}
     <input
       id={inputId}
       type="text"
@@ -243,6 +251,7 @@ function ParameterControl({
       }}
       onKeyDown={handleKeyDown}
     />
+    </>
   );
 }
 
@@ -294,9 +303,11 @@ function ParameterField({
   const capability = spec.capabilityKey === undefined ? undefined : state.backendCapabilities[spec.capabilityKey];
   const capabilityLabel = capability !== undefined && Object.hasOwn(capabilityKeys, capability) ? capabilityKeys[capability] : undefined;
   const description = parameterDescription(spec, tooltip, t);
+  const initialValidation = validateParameter(spec, initialValue);
   const clientError = draft?.validation.status === 'invalid'
     ? validationMessage(draft.validation.message, spec, t)
-    : undefined;
+    : draft === undefined && spec.activeWhen !== undefined && !initialValidation.ok
+      ? validationMessage(initialValidation.messageKey, spec, t) : undefined;
   const hasError = clientError !== undefined || serverErrorId !== undefined;
   const describedBy = [
     unitsId,
@@ -443,6 +454,15 @@ export function ParameterPanel({step, collapsed, onEditMask}: ParameterPanelProp
   const runError = step === null ? undefined : state.stepErrors[step.index];
   const [candidates, setCandidates] = useState<Record<number, boolean>>({});
   const candidate = step !== null && candidates[step.index];
+  const displayed = step === null ? null : {...step, params: {...step.params, ...parameterValues(step, state.drafts)}};
+  const prefixDraft = step !== null && Object.keys(state.drafts).some(key => {
+    const index = Number(key.slice(0, key.indexOf(':')));
+    return !Number.isInteger(index) || index <= step.index;
+  });
+  const referenceUntrusted = step !== null && (prefixDraft || state.phase === 'running'
+    || state.pendingTypeEdits.some(index => index <= step.index)
+    || state.recipe.some(item => item.index <= step.index && ['dirty', 'error', 'running'].includes(item.runtimeStatus))
+    || Object.keys(state.stepErrors).some(index => Number(index) <= step.index));
 
   return (
     <section
@@ -465,9 +485,10 @@ export function ParameterPanel({step, collapsed, onEditMask}: ParameterPanelProp
           <div className="selected-step-heading">
             <div>
               <span className="selection-label">{t('parameter.currentStep')}</span>
-              <h3>{isInitializer(step) ? t('project.initialization') : presentStep(step, state.materials, locale).title}</h3>
+              <h3>{isInitializer(step) ? t('project.initialization') : presentStep(displayed!, state.materials, locale).title}</h3>
               {!isInitializer(step) && <p>{step.name.startsWith('Structure ') ? t(`cad.${step.name.slice(10).toLowerCase()}` as TranslationKey) : step.name}</p>}
-              <p>{presentStep(step, state.materials, locale).description}</p>
+              <p>{presentStep(displayed!, state.materials, locale).description}</p>
+              {step.name === 'Structure Etch' && displayed?.params.etch_mode === 'Depth window' && <p>{t('cad.referenceZ')}: <output>{displayed.params.depth_reference === 'Fixed Z' ? t('cad.referenceNotApplicable') : step.runtimeStatus === 'done' && !referenceUntrusted && step.executionResult ? `${step.executionResult.referenceZNm} nm` : t('cad.referenceUnresolved')}</output></p>}
             </div>
             <StatusBadge status={step.runtimeStatus} />
           </div>
@@ -475,7 +496,7 @@ export function ParameterPanel({step, collapsed, onEditMask}: ParameterPanelProp
           {isInitializer(step) && <p>{t('project.openGuidance')}</p>}
           {!candidate && !isInitializer(step) && <>
           <p role="status">{Object.keys(state.drafts).some(key => key.startsWith(`${step.index}:`)) ? t('parameter.unsavedChanges') : step.runtimeStatus === 'dirty' ? t('parameter.modifiedBuildRequired') : ''}</p>
-          <button type="button" className="toolbar-button is-primary" disabled={disabled || Object.values(state.drafts).some(draft => draft.validation.status === 'invalid')} onClick={() => void actions.applyAndRunTo(step.index)}>{t('parameter.applyAndBuild')}</button>
+          <button type="button" className="toolbar-button is-primary" disabled={disabled || Object.entries(state.drafts).some(([key, draft]) => draftIsActive(state.recipe, state.drafts, key) && draft.validation.status === 'invalid')} onClick={() => void actions.applyAndRunTo(step.index)}>{t('parameter.applyAndBuild')}</button>
           {runError !== undefined && (
             <ErrorNotice
               title={t('parameter.runErrorTitle')}
@@ -489,7 +510,7 @@ export function ParameterPanel({step, collapsed, onEditMask}: ParameterPanelProp
             <p className="pane-empty">{t('parameter.noEditable')}</p>
           ) : (
             <form className="parameter-form" onSubmit={event => event.preventDefault()}>
-              {step.parameterSpecs.map(spec => {
+              {step.parameterSpecs.filter(spec => parameterIsActive(spec, step.parameterSpecs, parameterValues(step, state.drafts))).map(spec => {
                 const serverValue = Object.hasOwn(step.params, spec.key)
                   ? step.params[spec.key]
                   : spec.defaultValue;
