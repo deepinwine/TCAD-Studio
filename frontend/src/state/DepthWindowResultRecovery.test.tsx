@@ -57,3 +57,48 @@ it('repair and Apply restores a fresh reference after a prefix failure', async (
   expect(screen.getByTestId('errors')).toBeEmptyDOMElement();
   expect(api.setStep).toHaveBeenCalledTimes(1); expect(api.runTo).toHaveBeenCalledTimes(1);
 });
+
+it.each(['all', 'to'] as const)('%s invalidates old results through an unknown failure and failed recovery', operation => {
+  const recipe = [prefix, windowStep(1)];
+  const started = appReducer({...initialAppState, phase: 'ready', recipe}, {type: 'run/started', operation});
+  expect(started.recipe[1]).not.toHaveProperty('executionResult');
+  const network = new TcadApiError('unknown execution outcome', {status: 0, code: 'network_error'});
+  const failed = appReducer(started, {type: 'run/failed', error: network});
+  const recovered = appReducer(failed, {type: 'run/recovered', error: network});
+  const finished = appReducer(recovered, {type: 'mutation/finished'});
+  expect(finished.recipe[1]).not.toHaveProperty('executionResult');
+  expect(finished.stepErrors).toEqual({});
+  expect(appReducer({...finished, activeMutation: operation}, {type: 'run/succeeded', payload: {}}).recipe[1]).not.toHaveProperty('executionResult');
+});
+it('a known single-step run invalidates only that step and its input-dependent suffix', () => {
+  const recipe = [windowStep(0), windowStep(1), windowStep(2)];
+  const started = appReducer({...initialAppState, recipe}, {type: 'run/started', operation: 'step', index: 1});
+  expect(started.recipe[0].executionResult).toEqual({referenceZNm: 395});
+  expect(started.recipe[1]).not.toHaveProperty('executionResult');
+  expect(started.recipe[2]).not.toHaveProperty('executionResult');
+  const unknown = appReducer({...initialAppState, recipe}, {type: 'run/started', operation: 'step'});
+  expect(unknown.recipe.every(step => step.executionResult === undefined)).toBe(true);
+});
+it.each(['all', 'to'] as const)('%s unknown network failure hides the old reference and a new authoritative run restores it', async operation => {
+  const initial = {recipe: [prefix, windowStep(1)], factories: [], materials: [], model: {gridShape: [8, 8, 8], voxelSizeNm: 10}, uiState: {}};
+  const network = new TcadApiError('unknown execution outcome', {status: 0, code: 'network_error'});
+  const api = {init: vi.fn().mockResolvedValueOnce(initial).mockRejectedValue(network),
+    getTimeline: vi.fn(async () => {throw network;}),
+    runAll: vi.fn(async () => {throw network;}), runTo: vi.fn(async () => {throw network;}),
+  } as unknown as TcadApi;
+  function Harness() {
+    const {state, actions} = useAppState();
+    return <><button onClick={() => void (operation === 'all' ? actions.runAll() : actions.runTo(1))}>Run</button><output data-testid="phase">{state.phase}</output><ParameterPanel step={state.recipe[1] ?? null} collapsed={false} /></>;
+  }
+  render(<I18nProvider><AppStateProvider api={api}><Harness /></AppStateProvider></I18nProvider>);
+  expect(await screen.findByText('395 nm')).toBeVisible(); fireEvent.click(screen.getByText('Run'));
+  await waitFor(() => expect(api.init).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByTestId('phase')).toHaveTextContent('ready'));
+  expect(screen.queryByText('395 nm')).not.toBeInTheDocument();
+  expect(screen.getByText('未解析（需以当前输入成功构建）')).toBeVisible();
+  const fresh = {...windowStep(1), executionResult: {referenceZNm: 405}};
+  api.runAll = vi.fn(async () => ({recipe: [prefix, fresh]}));
+  api.runTo = vi.fn(async () => ({index: 1, recipe: [prefix, fresh]}));
+  api.getTimeline = vi.fn(async () => ({items: [], current: -1}));
+  fireEvent.click(screen.getByText('Run')); expect(await screen.findByText('405 nm')).toBeVisible();
+});

@@ -327,7 +327,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [api, createController, dispatch, releaseController]);
   const saveParameter = useCallback((index: number, key: string) => saveParameterInternal(index, key), [saveParameterInternal]);
 
-  const beginMutation = useCallback((operation: Exclude<ActiveMutation, null>): boolean => {
+  const beginMutation = useCallback((operation: Exclude<ActiveMutation, null>, index?: number): boolean => {
     if (candidateIndicesRef.current.size) return false;
     if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null || pendingSaveCountRef.current > 0) return false;
     if (invalidActiveConfiguration(stateRef.current)) {
@@ -340,7 +340,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     if (hasUnsavedDrafts(stateRef.current)) return false;
     cancelStandaloneTimeline();
     mutationGateRef.current = operation;
-    dispatch({type: 'run/started', operation});
+    dispatch({type: 'run/started', operation, index});
     return true;
   }, [cancelStandaloneTimeline, dispatch]);
 
@@ -360,7 +360,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     request: (signal: AbortSignal) => Promise<RunView>,
     fallbackStepIndex?: number,
   ): Promise<void> => {
-    if (!beginMutation(operation)) return;
+    if (!beginMutation(operation, fallbackStepIndex)) return;
     const controller = createController();
     try {
       const payload = await request(controller.signal);

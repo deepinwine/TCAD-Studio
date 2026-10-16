@@ -105,7 +105,7 @@ export type AppAction =
     sequence: number;
     error: TcadApiError;
   }
-  | {type: 'run/started'; operation: Exclude<ActiveMutation, null>}
+  | {type: 'run/started'; operation: Exclude<ActiveMutation, null>; index?: number}
   | {type: 'mutation/blocked'; error: TcadApiError}
   | {type: 'run/succeeded'; payload: RunView; index?: number}
   | {type: 'run/failed'; index?: number; error: TcadApiError}
@@ -335,9 +335,16 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         },
       };
     }
-    case 'run/started':
+    case 'run/started': {
+      const executing = ['step', 'to', 'all'].includes(action.operation);
+      const start = action.operation === 'step' && action.index !== undefined ? action.index : 0;
       return {
         ...state,
+        recipe: executing ? state.recipe.map(step => {
+          if (step.index < start || step.executionResult === undefined) return step;
+          const {executionResult: _executionResult, ...withoutResult} = step;
+          return withoutResult;
+        }) : state.recipe,
         phase: 'running',
         activeMutation: action.operation,
         historicalStepIndex: action.operation === 'timeline'
@@ -345,6 +352,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
           : null,
         globalError: null,
       };
+    }
     case 'mutation/blocked':
       return {...state, globalError: action.error};
     case 'run/succeeded': {
