@@ -23,6 +23,18 @@ SPEC、QUALITY；最新最小依赖 CI 为 590 tests、OK、13 skipped。
 环境为 `TCAD_SKIP_QT=1 MPLBACKEND=Agg`，pycache 位于 `/tmp`。服务测试仅使用
 临时目录；不重启用户服务，不自动合并或推送 main。
 
+## 2026-10-16 任务 4 验收
+
+检查器与独立单位在 `0b1a138..661156b` 完成，经过 SPEC → 修复 → SPEC APPROVE
+→ QUALITY APPROVE。两项参考值可信性 BLOCK、相机初始化竞态及项目设置误判均有
+回归测试；无待修 BLOCK 或 NB。主审完整前端 703 tests、类型检查、构建通过，
+最小依赖实际 CI 为 593 tests、OK、13 skipped，grid128 五例通过。
+详见 `docs/superpowers/2026-10-16-depth-window-task4-review.md`。
+
+下一段仅进入任务 5 浏览器验收，不能以 DOM 测试替代真实 3D、剖面或发布验收。
+所有者另建的独立公开仓库为 `deepinwine/TCAD-Studio`（remote `studio`）；本轮
+未合并、推送或重启服务。main 为 `27592de`，远端功能分支为 `3950e19`。
+
 ## 文件职责
 
 - 新建 `structure_cad/depth_window_etch.py`：参数解析、冻结高度带、可达表面、受限扩展候选，禁止直接修改 model。
@@ -105,18 +117,18 @@ np.testing.assert_array_equal(model.grid, before)
 
 ## 任务 4：检查器与独立单位
 
-- [ ] ParameterPanel 先写失败测试：普通模式只显示旧字段；区间模式只显示其参数；切换 Opening plane／Fixed Z 切换深度与 Z 标签，非活动值不阻塞保存。
-- [ ] 增量支持后端模式相关参数元数据，不在前端复制几何算法。只读参考 Z 必须取后端值；尚未执行时明确标识未解析，不能猜测当前模型表面。
-- [ ] 测试方向性滑块与数字同步、键盘、aria 标签、中英文、每个长度参数独立 nm／µm 转换和规范化提交。带边界截断、已有通道、最高开口平面说明均有中文与英文断言。
-- [ ] 工厂 fixture 从实际 Python 工厂更新，仅改 Structure Etch 对应内容；旧普通参数测试断言不减弱。
-- [ ] 运行 `npm test -- --run --maxWorkers=1 --no-file-parallelism`、`npm run typecheck`、`npm run build`。串行命令用于环境隔离，不修改测试 timeout 或断言。小提交并两阶段审查。
+- [x] ParameterPanel 先写失败测试：普通模式只显示旧字段；区间模式只显示其参数；切换 Opening plane／Fixed Z 切换深度与 Z 标签，非活动值不阻塞保存。
+- [x] 增量支持后端模式相关参数元数据，不在前端复制几何算法。只读参考 Z 必须取后端值；尚未执行时明确标识未解析，不能猜测当前模型表面。
+- [x] 测试方向性滑块与数字同步、键盘、aria 标签、中英文、每个长度参数独立 nm／µm 转换和规范化提交。带边界截断、已有通道、最高开口平面说明均有中文与英文断言。
+- [x] 工厂 fixture 从实际 Python 工厂更新，仅改 Structure Etch 对应内容；旧普通参数测试断言不减弱。
+- [x] 运行 `npm test -- --run --maxWorkers=1 --no-file-parallelism`、`npm run typecheck`、`npm run build`。串行命令用于环境隔离，不修改测试 timeout 或断言。小提交并两阶段审查。
 
 ## 任务 5：验收与发布
 
 - [ ] 浏览器创建 300 nm 通道；区间 100–200 nm、距离 30 nm、方向性 0；检查局部扩腔及 X/Y/Z 剖面，区间外不变。
 - [ ] 对比方向性 100、固定 Z 等价区间；变换视角确认不是贴图或纯视图伪造。验证只读参考面与真实执行前参考一致。
 - [ ] 重跑全部专项、AGENTS 基线、编译、grid128，以及前端全量测试／类型检查／构建；最终独立审查关闭所有 BLOCK。
-- [ ] 经批准合并到 main，仅推 backup 的 deepinwine 仓库。更新服务前保存并核对当前用户配方；不因启动自动加载优先级丢失当前编辑。
+- [ ] 由所有者确认合并及发布目标后合并到 main；新增独立仓库为 studio／deepinwine/TCAD-Studio，不把旧 backup 约定当作自动推送授权，也不改写第三方 origin。更新服务前保存并核对当前用户配方；不因启动自动加载优先级丢失当前编辑。
 
 ## 自检与执行顺序
 

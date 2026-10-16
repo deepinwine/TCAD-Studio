@@ -3,8 +3,10 @@
 状态：所有者已确认书面规格并授权开始。步骤眼睛功能已交付；功能分支已实现
 参数解析和有界几何（至 `9a2b1ef`）。2026-10-15 同步 main 可靠性修复后，
 任务 3 的协议、持久化与失败原子性验收通过（`8c02796`、`9c08516`）；
-检查器及浏览器验收尚未完成，未合入 main。验收记录见
-`docs/superpowers/2026-10-15-depth-window-task3-review.md`。
+2026-10-16 任务 4 检查器、独立单位及真实执行参考完成（`0b1a138..661156b`），
+独立 SPEC、QUALITY 均 APPROVE。任务 5 真实浏览器验收及发布尚未完成，未合入 main。
+验收记录见 `docs/superpowers/2026-10-15-depth-window-task3-review.md` 与
+`docs/superpowers/2026-10-16-depth-window-task4-review.md`。
 
 ## 1. 目标与范围
 
