@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import type {PointerEvent as ReactPointerEvent} from 'react';
 import {TcadApiError} from '../api/client';
 import type {TcadApi, ModelSummaryView, DisplayManifestView} from '../api/types';
@@ -71,7 +71,8 @@ export function ThreeViewer({api, model = null, refreshToken, runtimeFactory, hi
   const [distance, setDistance] = useState<number | null>(null);
   const pointerDownRef = useRef<{id: number; x: number; y: number} | null>(null);
 
-  useEffect(() => {
+  // Publish the runtime before visible controls can receive an interaction.
+  useLayoutEffect(() => {
     const container = containerRef.current;
     if (container === null) return;
     let runtime: ViewerRuntime;
