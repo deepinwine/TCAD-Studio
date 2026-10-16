@@ -28,6 +28,7 @@ import {
 } from './appReducer';
 
 export interface AppStateActions {
+  invalidateExecutionResults(index?: number): void;
   toggleStepVisibility(stepId: string): void;
   setDisplayReady(manifest: import('../api/types').DisplayManifestView | null, ready: boolean, failed?: boolean): void;
   setTypeCandidate(index: number, pending: boolean): void;
@@ -282,6 +283,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
           const sequences = Object.fromEntries(entries.map(([key, draft]) => [key, draft.sequence]));
           const params = Object.fromEntries(entries.map(([key, draft]) => [key.slice(key.indexOf(':') + 1), draft.value]));
           try {
+            dispatch({type: 'execution/resultsInvalidated', index});
             const payload = await api.setStep({index, params}, controller.signal);
             if (mountedRef.current && !controller.signal.aborted) dispatch({type: 'parameter/batchSaved', index, sequences, payload});
           } catch (error) {
@@ -291,6 +293,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
           return;
         }
         try {
+          dispatch({type: 'execution/resultsInvalidated', index});
           const payload = await api.setStep(
             {index, params: {[key]: draft.value}},
             controller.signal,
@@ -327,7 +330,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [api, createController, dispatch, releaseController]);
   const saveParameter = useCallback((index: number, key: string) => saveParameterInternal(index, key), [saveParameterInternal]);
 
-  const beginMutation = useCallback((operation: Exclude<ActiveMutation, null>, index?: number): boolean => {
+  const beginMutation = useCallback((operation: Exclude<ActiveMutation, null>, index?: number, invalidateResults = false): boolean => {
     if (candidateIndicesRef.current.size) return false;
     if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null || pendingSaveCountRef.current > 0) return false;
     if (invalidActiveConfiguration(stateRef.current)) {
@@ -340,7 +343,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     if (hasUnsavedDrafts(stateRef.current)) return false;
     cancelStandaloneTimeline();
     mutationGateRef.current = operation;
-    dispatch({type: 'run/started', operation, index});
+    dispatch({type: 'run/started', operation, index, invalidateResults});
     return true;
   }, [cancelStandaloneTimeline, dispatch]);
 
@@ -523,7 +526,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
 
   const restoreTimeline = useCallback(async (index: number): Promise<void> => {
     const item = stateRef.current.timeline?.items.find(candidate => candidate.index === index);
-    if (item?.snapshotValid !== true || !beginMutation('timeline')) return;
+    if (item?.snapshotValid !== true || !beginMutation('timeline', undefined, true)) return;
 
     const controller = createController();
     try {
@@ -547,7 +550,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const uploadMaskAction = useCallback(async (file: File): Promise<void> => {
     const index = stateRef.current.selectedStepIndex;
     if (index === null) return;
-    if (!beginMutation('mask')) return;
+    if (!beginMutation('mask', index, true)) return;
     const controller = createController();
     try {
       const payload = await api.uploadMask(file, index, controller.signal);
@@ -571,7 +574,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     operation: (signal: AbortSignal) => Promise<StepView[]>,
     onApplied?: (recipe: StepView[]) => void,
   ): Promise<void> => {
-    if (!beginMutation('recipe')) return;
+    if (!beginMutation('recipe', undefined, true)) return;
     const controller = createController();
     try {
       const recipe = await operation(controller.signal);
@@ -625,6 +628,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
       if (!mountedRef.current || hasUnsavedDrafts(stateRef.current)) return false;
       const controller = createController();
       try {
+        dispatch({type: 'execution/resultsInvalidated', index});
         const payload = await api.setStep({index, name, ...configuration}, controller.signal);
         if (!mountedRef.current || controller.signal.aborted) return false;
         dispatch({type: 'step/typeReplaced', payload});
@@ -696,7 +700,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const replaceRecipe = useCallback(async (
     operation: (signal: AbortSignal) => Promise<RecipeLoadView>,
   ): Promise<boolean> => {
-    if (!beginMutation('recipe')) return false;
+    if (!beginMutation('recipe', undefined, true)) return false;
     const controller = createController();
     let applied = false;
     try {
@@ -790,7 +794,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const historyStep = useCallback(async (
     operation: 'undo' | 'redo',
   ): Promise<void> => {
-    if (!beginMutation(operation)) return;
+    if (!beginMutation(operation, undefined, true)) return;
     const controller = createController();
     try {
       const view = operation === 'undo'
@@ -880,6 +884,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [bootstrap]);
 
   const actions = useMemo<AppStateActions>(() => ({
+    invalidateExecutionResults: index => dispatch({type: 'execution/resultsInvalidated', index}),
     toggleStepVisibility: stepId => dispatch({type: 'display/toggled', stepId}),
     setDisplayReady: (manifest, ready, failed) => dispatch({type: 'display/loaded', manifest, ready, failed}),
     applyMaskAsset: payload => dispatch({type: 'mask/assetApplied', payload}),

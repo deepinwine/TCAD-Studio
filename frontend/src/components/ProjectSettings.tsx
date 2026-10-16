@@ -4,6 +4,12 @@ import {useAppState} from '../state/AppStateContext';
 import {useI18n} from '../i18n/I18nContext';
 import {AddStepDialog} from './AddStepDialog';
 import {updateProjectRecipe, validDomain} from './projectSettingsModel';
+
+function sameStepExceptResult(current: StepView, source: StepView): boolean {
+  const keys = (Object.keys(current) as (keyof StepView)[]).filter(key => key !== 'executionResult');
+  return keys.length === Object.keys(source).filter(key => key !== 'executionResult').length
+    && keys.every(key => Object.hasOwn(source, key) && Object.is(current[key], source[key]));
+}
 export function ProjectSettings({api, onClose}: {api: TcadApi; onClose(): void}) {
   const {state, actions} = useAppState(); const {t} = useI18n();
   const [exported, setExported] = useState<Record<string, unknown> | null>(null);
@@ -37,7 +43,8 @@ export function ProjectSettings({api, onClose}: {api: TcadApi; onClose(): void})
   const numbers = grid.map(Number); const size = Number(voxel);
   const valid = grid.every(value => value.trim() !== '') && voxel.trim() !== '' && validDomain(numbers, size);
   const busy = state.phase === 'running' || state.activeMutation !== null;
-  const stale = state.recipe !== sourceRecipe.current;
+  const stale = state.recipe !== sourceRecipe.current && (state.recipe.length !== sourceRecipe.current.length
+    || state.recipe.some((step, index) => !sameStepExceptResult(step, sourceRecipe.current[index])));
   return <dialog ref={dialog} aria-modal="true" aria-labelledby="project-settings-title" className="add-step-dialog" onCancel={event => {event.preventDefault(); if (!busy) onClose();}}>
     <h2 id="project-settings-title">{t('project.title')}</h2>
     <p>{t('project.warning')}</p><p>{t('project.budget')}</p>

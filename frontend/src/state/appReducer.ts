@@ -75,6 +75,7 @@ export type AppAction =
   | {type: 'candidate/pending'; indices: number[]}
   | {type: 'step/typeReplaced'; payload: SetStepView}
   | {type: 'parameter/pendingSaves'; count: number}
+  | {type: 'execution/resultsInvalidated'; index?: number}
   | {type: 'parameter/batchSaved'; index: number; sequences: Record<string, number>; payload: SetStepView}
   | {type: 'parameter/displayChanged'; index: number; key: string; rawValue: string | boolean; displayUnit: string}
   | {type: 'bootstrap/started'}
@@ -105,7 +106,7 @@ export type AppAction =
     sequence: number;
     error: TcadApiError;
   }
-  | {type: 'run/started'; operation: Exclude<ActiveMutation, null>; index?: number}
+  | {type: 'run/started'; operation: Exclude<ActiveMutation, null>; index?: number; invalidateResults?: boolean}
   | {type: 'mutation/blocked'; error: TcadApiError}
   | {type: 'run/succeeded'; payload: RunView; index?: number}
   | {type: 'run/failed'; index?: number; error: TcadApiError}
@@ -182,6 +183,17 @@ function withoutStepError(
   const result = {...source};
   delete result[index];
   return result;
+}
+
+function withoutExecutionResults(recipe: StepView[], start = 0): StepView[] {
+  let changed = false;
+  const result = recipe.map(step => {
+    if (step.index < start || step.executionResult === undefined) return step;
+    changed = true;
+    const {executionResult: _executionResult, ...withoutResult} = step;
+    return withoutResult;
+  });
+  return changed ? result : recipe;
 }
 
 function applyStatuses(
@@ -335,16 +347,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         },
       };
     }
+    case 'execution/resultsInvalidated':
+      return {...state, recipe: withoutExecutionResults(state.recipe, action.index)};
     case 'run/started': {
       const executing = ['step', 'to', 'all'].includes(action.operation);
-      const start = action.operation === 'step' && action.index !== undefined ? action.index : 0;
+      const start = action.operation === 'step' || action.invalidateResults ? action.index : undefined;
       return {
         ...state,
-        recipe: executing ? state.recipe.map(step => {
-          if (step.index < start || step.executionResult === undefined) return step;
-          const {executionResult: _executionResult, ...withoutResult} = step;
-          return withoutResult;
-        }) : state.recipe,
+        recipe: executing || action.invalidateResults ? withoutExecutionResults(state.recipe, start) : state.recipe,
         phase: 'running',
         activeMutation: action.operation,
         historicalStepIndex: action.operation === 'timeline'

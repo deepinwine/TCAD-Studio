@@ -203,9 +203,14 @@ worker 覆盖 add/set/import/run、相对/固定带的 0%/50% 逐体素独立面
 undo/redo、Timeline 或缓存快照恢复不恢复此诊断，缺少可信结果即省略。
 React 对本步骤或任何前缀草稿隐藏旧值；旧服务、恢复、失败均明确显示未解析，
 Fixed Z 显示无需孔口参考。旧物理 Etch 的 `last_metrics` 不受此清理影响。
-React 在实际执行请求开始时清除受影响步骤的旧执行结果；未知执行结果或网络与恢复
+React 在实际执行、历史／Timeline 恢复或写入配方／工艺输入请求开始时清除受影响步骤的
+旧执行结果；未知执行结果或网络与恢复
 同时失败后，仅新的权威步骤列表可重新发布参考值，旧服务成功但不带结果时保持未解析。
 构建到目标成功后，仅清除权威列表中明确完成的前缀历史错误，未证明的错误继续保留。
+纯保存、导出、重命名和只读 Timeline 查询不清除有效参考值。Mask Workbench 仅在
+保存／导入并应用获准发出写请求前失效对应步骤及后缀结果，取消和导出不触发失效。
+前端恢复与未知写入失败由 `DepthWindowResultRecovery.test.tsx`、
+`DepthWindowMutationResults.test.tsx` 与 `MaskWorkbenchResults.test.tsx` 覆盖。
 HTTP 生命周期由同模块的 `test_execution_reference_result_is_real_optional_and_never_stale`、
 `test_reference_result_clears_for_timeline_failure_fixed_z_and_reload` 与
 `test_run_all_and_to_deliver_reference_in_authoritative_recipe` 覆盖。

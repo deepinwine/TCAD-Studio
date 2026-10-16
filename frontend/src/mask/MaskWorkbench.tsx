@@ -24,6 +24,7 @@ export interface MaskWorkbenchProps {
   onApply(payload: MaskAssetApplyView): void;
   onClose(): void;
   onError?(error: unknown): void;
+  onWriteStart?(): void;
 }
 function NumericField({
   label,
@@ -86,6 +87,7 @@ export function MaskWorkbench({
   onApply,
   onClose,
   onError,
+  onWriteStart,
 }: MaskWorkbenchProps) {
   const [state, dispatch] = useReducer(maskEditorReducer, initialAsset, createMaskEditorState);
   const {t} = useI18n();
@@ -188,6 +190,7 @@ export function MaskWorkbench({
   }
   const save = () =>
     request(async (signal) => {
+      onWriteStart?.();
       const payload = await api.saveAndApplyMaskAsset({asset: state.asset, stepIndex}, signal);
       if (signal.aborted || !mounted.current) return;
       onApply(payload);
@@ -195,6 +198,7 @@ export function MaskWorkbench({
     });
   const importFile = (file: File) =>
     request(async (signal) => {
+      onWriteStart?.();
       const payload = await api.importAndApplyMaskAsset(file, stepIndex, signal);
       if (signal.aborted || !mounted.current) return;
       onApply(payload);
