@@ -349,6 +349,13 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {...state, globalError: action.error};
     case 'run/succeeded': {
       const index = action.payload.index ?? action.index;
+      const targetErrors = withoutStepError(state.stepErrors, index);
+      const stepErrors = state.activeMutation === 'all' ? {}
+        : state.activeMutation === 'to' && index !== undefined
+          ? Object.fromEntries(Object.entries(targetErrors).filter(([key]) =>
+            !action.payload.recipe?.some(step => step.index === Number(key)
+              && step.index <= index && step.runtimeStatus === 'done')))
+          : targetErrors;
       return {
         ...state,
         recipe: updateStepRuntimeStatus(
@@ -360,9 +367,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         lastModelRevision: action.payload.modelRevision ?? state.lastModelRevision,
         lastRunResult: action.payload.result,
         previewGeneration: state.previewGeneration + 1,
-        stepErrors: state.activeMutation === 'all'
-          ? {}
-          : withoutStepError(state.stepErrors, index),
+        stepErrors,
         historicalStepIndex: null,
         globalError: null,
       };
