@@ -55,7 +55,7 @@ export function StepStructureBar() {
       >
         {t('structure.add')}
       </button>
-      {!available && <small>{t('structure.legacyServer')}</small>}
+      {addChoice !== '' && !available && <small>{t('structure.legacyServer')}</small>}
       {template !== null && <AddStepDialog template={template} busy={busy} onCancel={() => setTemplate(null)} onConfirm={async configuration => {const applied = await actions.addStep(template.name, configuration); if (applied) {setTemplate(null); setAddChoice('');} return applied;}} />}
       <button
         type="button"

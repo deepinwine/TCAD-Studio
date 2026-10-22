@@ -274,6 +274,38 @@ describe('StepStructureBar', () => {
     expect(screen.getByText(/结构工艺模板不可用/)).toBeVisible();
   });
 
+  it.each([
+    {label: '未提供模板元数据', templates: undefined},
+    {label: '模板列表为空', templates: []},
+    {label: '存在可用模板', templates: factoryTemplates},
+  ])('未选择类型时（$label）不显示旧服务器提示', async ({templates}) => {
+    const api = apiStub({init: vi.fn(async () => ({...initView(), factoryTemplates: templates}))});
+    mount(api);
+    await waitFor(() => expect(screen.getByRole('button', {name: '下移'})).toBeEnabled());
+
+    expect(screen.getByRole('button', {name: '添加步骤'})).toBeDisabled();
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+  });
+
+  it('清空缺少模板的类型后隐藏提示，且不发起变更请求', async () => {
+    const template = factoryTemplates.find(item => item.name === 'Structure Deposit')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), factoryTemplates: [template]}))});
+    render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><StepStructureBar /></AppStateProvider></I18nProvider>);
+    await waitFor(() => expect(screen.getByRole('button', {name: '下移'})).toBeEnabled());
+
+    const typeSelect = screen.getByLabelText('添加步骤类型');
+    fireEvent.change(typeSelect, {target: {value: 'Structure Etch'}});
+    expect(screen.getByText(/结构工艺模板不可用/)).toBeVisible();
+    expect(screen.getByRole('button', {name: '添加步骤'})).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', {name: 'EN'}));
+    expect(screen.getByText(/Structure templates are unavailable/)).toBeVisible();
+    fireEvent.change(typeSelect, {target: {value: ''}});
+
+    expect(screen.queryByText(/Structure templates are unavailable/)).not.toBeInTheDocument();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.setStep).not.toHaveBeenCalled();
+  });
+
   it('旧步骤可内联改成任何目录类型，取消不请求且确认原子替换', async () => {
     const source = step(0, {name: 'Legacy', instanceName: 'contact', params: {thickness_nm: 500}});
     const target = step(0, {name: 'Structure Etch', instanceName: 'Structure Etch', params: {depth_nm: 20}, parameterSpecs: [{key: 'depth_nm', label: 'depth', type: 'float', minimum: 0, units: 'nm'}]});
