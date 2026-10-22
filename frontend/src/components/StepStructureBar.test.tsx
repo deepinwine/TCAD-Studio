@@ -306,6 +306,63 @@ describe('StepStructureBar', () => {
     expect(api.setStep).not.toHaveBeenCalled();
   });
 
+  it('从缺少模板切换到可用类型后收起提示，空选时添加保持禁用', async () => {
+    const template = factoryTemplates.find(item => item.name === 'Structure Deposit')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), factoryTemplates: [template]}))});
+    mount(api);
+    await waitFor(() => expect(screen.getByRole('button', {name: '下移'})).toBeEnabled());
+
+    const typeSelect = screen.getByLabelText('添加步骤类型');
+    const addButton = screen.getByRole('button', {name: '添加步骤'});
+    fireEvent.change(typeSelect, {target: {value: 'Structure Etch'}});
+    expect(screen.getByText(/结构工艺模板不可用/)).toBeVisible();
+    expect(addButton).toBeDisabled();
+    fireEvent.change(typeSelect, {target: {value: 'Structure Deposit'}});
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+    expect(addButton).toBeEnabled();
+    fireEvent.change(typeSelect, {target: {value: ''}});
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+    expect(addButton).toBeDisabled();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.setStep).not.toHaveBeenCalled();
+  });
+
+  it('结构沉积按当前模式检查实际模板', async () => {
+    const template = factoryTemplates.find(item => item.name === 'Structure Deposit')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), factoryTemplates: [template]}))});
+    mount(api);
+    await waitFor(() => expect(screen.getByRole('button', {name: '下移'})).toBeEnabled());
+
+    const addButton = screen.getByRole('button', {name: '添加步骤'});
+    fireEvent.change(screen.getByLabelText('添加步骤类型'), {target: {value: 'Structure Deposit'}});
+    expect(addButton).toBeEnabled();
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+    const modeSelect = screen.getByLabelText('沉积模式');
+    fireEvent.change(modeSelect, {target: {value: 'Fill'}});
+    expect(screen.getByText(/结构工艺模板不可用/)).toBeVisible();
+    expect(addButton).toBeDisabled();
+    fireEvent.change(modeSelect, {target: {value: 'Deposit'}});
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+    expect(addButton).toBeEnabled();
+    expect(api.addStep).not.toHaveBeenCalled();
+  });
+
+  it('成功添加后重置空选择且不重新显示模板提示', async () => {
+    const template = factoryTemplates.find(item => item.name === 'Structure Deposit')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), factoryTemplates: [template]}))});
+    mount(api);
+    await waitFor(() => expect(screen.getByRole('button', {name: '下移'})).toBeEnabled());
+
+    fireEvent.change(screen.getByLabelText('添加步骤类型'), {target: {value: 'Structure Deposit'}});
+    fireEvent.click(screen.getByRole('button', {name: '添加步骤'}));
+    fireEvent.click(screen.getByRole('button', {name: '确认添加'}));
+    await waitFor(() => expect(api.addStep).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('添加步骤类型')).toHaveValue('');
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', {name: '添加步骤'})).toBeDisabled();
+  });
+
   it('旧步骤可内联改成任何目录类型，取消不请求且确认原子替换', async () => {
     const source = step(0, {name: 'Legacy', instanceName: 'contact', params: {thickness_nm: 500}});
     const target = step(0, {name: 'Structure Etch', instanceName: 'Structure Etch', params: {depth_nm: 20}, parameterSpecs: [{key: 'depth_nm', label: 'depth', type: 'float', minimum: 0, units: 'nm'}]});
