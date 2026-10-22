@@ -126,6 +126,9 @@ class DepthWindowEtchHTTPTests(unittest.TestCase):
         self.request('POST', '/api/step/set', {'index': index, 'params': {'directionality_percent': 100}})
         failure = self.request('POST', '/api/run/step', {'index': index}, ok=False)
         self.assertFalse(failure['ok'])
+        self.assertEqual(failure.get('code'), 'depth_window_no_effective_deletion')
+        self.assertEqual(failure.get('parameter_path'), 'params.directionality_percent')
+        self.assertTrue(failure['rolled_back'])
         self.assertNotIn('execution_result', self.recipe()[index])
         self.request('POST', '/api/step/set', {'index': index, 'params': {'directionality_percent': 0, 'depth_reference': 'Fixed Z', 'lower_z_nm': 195, 'upper_z_nm': 295}})
         self.request('POST', '/api/run/step', {'index': index})
@@ -450,6 +453,15 @@ class DepthWindowEtchHTTPTests(unittest.TestCase):
                 with patch.object(depth_window_etch, limit, 1 if failure in ('memory', 'visits') else getattr(depth_window_etch, limit)):
                     rejected = self.request('POST', '/api/run/step', {'index': index}, ok=False)
                 self.assertTrue(rejected['rolled_back'], rejected)
+                code = ('depth_window_no_accessible_target' if failure == 'no channel' else
+                        'depth_window_no_effective_deletion' if failure == 'directional wall' else
+                        'depth_window_budget_exceeded')
+                parameter = ('params.material' if failure == 'no channel' else
+                             'params.directionality_percent' if failure == 'directional wall' else
+                             'params.etch_distance_nm')
+                self.assertEqual(rejected.get('code'), code)
+                self.assertEqual(rejected.get('parameter_path'), parameter)
+                self.assertNotIn('execution_result', self.recipe()[index])
                 self.assertEqual(rejected['step_index'], index)
                 self.assertRegex(rejected['error'], 'surface|deletion|memory budget|work budget')
                 self.assert_state(before, execution_failure=True, index=index)

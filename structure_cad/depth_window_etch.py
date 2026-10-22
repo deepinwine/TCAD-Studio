@@ -12,6 +12,14 @@ MAX_WORK_BYTES = 256 * 1024 * 1024
 MAX_WORK_VISITS = 128 * 1024 * 1024
 
 
+class DepthWindowGeometryError(ValueError):
+    """Known geometric rejections with stable, non-sensitive diagnostics."""
+    def __init__(self, message, *, code, parameter):
+        super().__init__(message)
+        self.code = code
+        self.parameter = parameter
+
+
 @dataclass(frozen=True)
 class WindowParams:
     etch_mode: str = 'Standard'
@@ -64,18 +72,21 @@ def precheck_budget(model, window):
         raise ValueError('Structure Etch Depth window: invalid domain')
     scaled = distance / voxel
     if not math.isfinite(scaled) or scaled > math.hypot(nx, ny, nz):
-        raise ValueError('Structure Etch Depth window distance exceeds domain distance budget')
+        raise DepthWindowGeometryError('Structure Etch Depth window distance exceeds domain distance budget',
+                                       code='depth_window_budget_exceeded', parameter='params.etch_distance_nm')
     count = nx * ny * nz
     plane = (2*nx+1) * (2*ny+1)
     required = count * (80 + model.grid.dtype.itemsize) + plane * 64 + nx*ny*32
     if required > MAX_WORK_BYTES:
-        raise ValueError('Structure Etch Depth window exceeds workspace memory budget')
+        raise DepthWindowGeometryError('Structure Etch Depth window exceeds workspace memory budget',
+                                       code='depth_window_budget_exceeded', parameter='params.etch_distance_nm')
     span = min(nz, int(math.ceil((2-a)*scaled)) + 3)
     # Each bounded Z visit has one scalar distance check in addition to its
     # nx*ny plane comparisons. Count both, even for long, thin domains.
     visits = 3*nz*plane + 3*nz*span*(nx*ny+1)
     if visits > MAX_WORK_VISITS:
-        raise ValueError('Structure Etch Depth window exceeds distance work budget')
+        raise DepthWindowGeometryError('Structure Etch Depth window exceeds distance work budget',
+                                       code='depth_window_budget_exceeded', parameter='params.etch_distance_nm')
 
 
 def _finite(params, key, default):
@@ -148,7 +159,8 @@ def resolve_window(model, parsed):
     target_id = material_id(model, parsed.material)
     opened = np.asarray(model.open_mask, dtype=bool)
     if not opened.any():
-        raise ValueError('Structure Etch Depth window: no effective opening')
+        raise DepthWindowGeometryError('Structure Etch Depth window: no effective opening',
+                                       code='depth_window_no_effective_opening', parameter='params.etch_mode')
     voxel = model.voxel_size_nm
     nz = model.grid.shape[2]
     reference = None
@@ -167,7 +179,8 @@ def resolve_window(model, parsed):
         h = heights(model.grid)
         occupied_rim = rim & (h > 0)
         if not occupied_rim.any():
-            raise ValueError('Structure Etch: no nonempty opening rim; use Fixed Z')
+            raise DepthWindowGeometryError('Structure Etch: no nonempty opening rim; use Fixed Z',
+                                           code='depth_window_no_nonempty_rim', parameter='params.depth_reference')
         reference = (int(h[occupied_rim].max()) - .5) * voxel
         lower = reference - parsed.end_depth_nm
         upper = reference - parsed.start_depth_nm
@@ -175,11 +188,13 @@ def resolve_window(model, parsed):
         lower, upper = parsed.lower_z_nm, parsed.upper_z_nm
     domain_lower, domain_upper = -.5 * voxel, (nz - .5) * voxel
     if lower < domain_lower or upper > domain_upper:
-        raise ValueError('Structure Etch Depth window height band exceeds domain boundaries')
+        raise DepthWindowGeometryError('Structure Etch Depth window height band exceeds domain boundaries',
+                                       code='depth_window_band_outside_domain', parameter='params.depth_reference')
     centers = np.arange(nz) * voxel
     indices = tuple(int(index) for index in np.flatnonzero((centers >= lower) & (centers < upper)))
     if not indices:
-        raise ValueError('Structure Etch Depth window height band contains no voxel center')
+        raise DepthWindowGeometryError('Structure Etch Depth window height band contains no voxel center',
+                                       code='depth_window_no_voxel_center', parameter='params.depth_reference')
     return ResolvedWindow(lower_z_nm=lower, upper_z_nm=upper, reference_z_nm=reference,
                           z_indices=indices, etch_distance_nm=parsed.etch_distance_nm,
                           directionality=parsed.directionality, target_id=target_id)
@@ -192,7 +207,8 @@ def accessible_surface(model, resolved):
     precheck_budget(model, resolved)
     opened = np.array(model.open_mask, dtype=bool, copy=True)
     if not opened.any():
-        raise ValueError('Structure Etch Depth window: no effective opening')
+        raise DepthWindowGeometryError('Structure Etch Depth window: no effective opening',
+                                       code='depth_window_no_effective_opening', parameter='params.etch_mode')
     air = model.grid == 0
     inlet = np.zeros(model.grid.shape, dtype=bool)
     inlet[:, :, -1] = opened & air[:, :, -1]
@@ -221,7 +237,8 @@ def accessible_surface(model, resolved):
             face.flags.writeable = False
             faces.append(face)
     if not any(face.any() for face in faces):
-        raise ValueError('Structure Etch Depth window: no accessible target surface; create a channel or adjust the band')
+        raise DepthWindowGeometryError('Structure Etch Depth window: no accessible target surface; create a channel or adjust the band',
+                                       code='depth_window_no_accessible_target', parameter='params.material')
     reachable.flags.writeable = False
     opened.flags.writeable = False
     return AccessibleSurface(tuple(faces), reachable, opened)
@@ -305,7 +322,8 @@ def window_etch_candidate(model, resolved):
     connected = binary_propagation(inlet, mask=traversable)
     selected &= connected
     if not selected.any():
-        raise ValueError('Structure Etch Depth window: no effective deletion (no geometry changed)')
+        raise DepthWindowGeometryError('Structure Etch Depth window: no effective deletion (no geometry changed)',
+                                       code='depth_window_no_effective_deletion', parameter='params.directionality_percent')
     candidate = model.grid.copy()
     candidate[selected] = 0
     return candidate

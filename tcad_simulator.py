@@ -20562,10 +20562,14 @@ class StructureGeometryStep(ProcessStep):
 
     def execute(self, model: ProcessModel) -> str:
         from structure_cad.operations import construct
+        from structure_cad.depth_window_etch import DepthWindowGeometryError
         metrics: Dict[str, Any] = {}
         if self.operation == "Etch":
             self.last_metrics = {}
-        changed = construct(model, self.operation, step_id=self.step_id, execution_metrics=metrics, **self.params)
+        try:
+            changed = construct(model, self.operation, step_id=self.step_id, execution_metrics=metrics, **self.params)
+        except DepthWindowGeometryError as exc:
+            raise EtchParameterError(str(exc), code=exc.code, parameter=exc.parameter) from exc
         if self.operation == "Etch":
             self.last_metrics = metrics
         return f"{self.name}: {changed} voxels constructed"

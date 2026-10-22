@@ -101,6 +101,20 @@ The CAD shell adds these worker commands behind HTTP endpoints:
 
 Failed steps return a structured payload (`step_index`, `instance_name`, `step_type`, `parameter_path`, `error`, `error_type`, `suggestion`, `rolled_back`) that the browser renders on the failing step card and in the Parameters panel.
 
+Structure Etch Depth window geometric rejections additionally return these fixed `code` values through the existing run endpoints. The geometry module raises `DepthWindowGeometryError` (a `ValueError` subtype); `StructureGeometryStep.execute` adapts only that type to the existing `EtchParameterError` transaction contract. Candidate construction and rollback semantics are unchanged. Basic input validation and unknown exceptions retain their existing behavior; messages are never inspected to infer a code.
+
+| Code | `parameter_path` | Meaning / action |
+| --- | --- | --- |
+| `depth_window_no_effective_opening` | `params.etch_mode` | Set an effective mask opening; create a channel for interior bands. |
+| `depth_window_no_nonempty_rim` | `params.depth_reference` | No solid opening rim; use Fixed Z. |
+| `depth_window_band_outside_domain` | `params.depth_reference` | Adjust the active depths or Z bounds to the domain. |
+| `depth_window_no_voxel_center` | `params.depth_reference` | Move or widen the band; check voxel size. |
+| `depth_window_no_accessible_target` | `params.material` | Create a channel; check the target material and band. |
+| `depth_window_no_effective_deletion` | `params.directionality_percent` | Check material and band; 100% directionality cannot delete laterally from purely vertical walls. |
+| `depth_window_budget_exceeded` | `params.etch_distance_nm` | Distance, workspace, or work budget exceeded; reduce grid size or etch distance. |
+
+These paths identify a relevant configuration field, not the sole possible cause. The browser maps only the known codes to fixed Chinese/English text with adjustment guidance. Raw server messages and suggestions remain hidden, including for unknown errors. Failed runs keep the existing `rolled_back` reporting and do not publish an execution reference result.
+
 ## Manual Viewer Smoke Check
 
 Start an isolated WebUI with a throwaway storage root:

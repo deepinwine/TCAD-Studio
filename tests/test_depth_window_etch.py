@@ -555,6 +555,38 @@ class DepthWindowEtchTests(unittest.TestCase):
     def parse(self, **params):
         return self.api.parse_window_params({'etch_mode': 'Depth window', **params})
 
+    def test_geometric_resolution_rejections_have_fixed_codes_and_parameter_paths(self):
+        cases = [
+            ('depth_window_no_effective_opening', 'params.etch_mode', 'closed', {}),
+            ('depth_window_no_nonempty_rim', 'params.depth_reference', 'empty', {'start_depth_nm': 0, 'end_depth_nm': 10}),
+            ('depth_window_band_outside_domain', 'params.depth_reference', None, {'depth_reference': 'Fixed Z', 'lower_z_nm': -6, 'upper_z_nm': 10}),
+            ('depth_window_no_voxel_center', 'params.depth_reference', None, {'depth_reference': 'Fixed Z', 'lower_z_nm': 21, 'upper_z_nm': 29}),
+            ('depth_window_budget_exceeded', 'params.etch_distance_nm', None, {'etch_distance_nm': 1e300}),
+        ]
+        for code, parameter, setup, params in cases:
+            grid, opened = self.model.grid.copy(), self.model.open_mask.copy()
+            try:
+                if setup == 'closed':
+                    self.model.open_mask.fill(False)
+                if setup == 'empty':
+                    self.model.grid.fill(0)
+                with self.subTest(code=code), self.assertRaises(ValueError) as raised:
+                    self.api.resolve_window(self.model, self.parse(**params))
+                self.assertEqual(getattr(raised.exception, 'code', None), code)
+                self.assertEqual(getattr(raised.exception, 'parameter', None), parameter)
+            finally:
+                self.model.grid[:] = grid
+                self.model.open_mask[:] = opened
+
+    def test_unknown_geometry_exceptions_are_not_classified_from_their_message(self):
+        step = tcad.StructureEtchStep(self.db)
+        with mock.patch('structure_cad.operations.construct', side_effect=ValueError('no effective deletion /private/secret-token')):
+            rejected = tcad._run_model_transaction(self.model, lambda: step.execute(self.model))
+        self.assertTrue(rejected['rolled_back'])
+        self.assertEqual(rejected['error_type'], 'ValueError')
+        self.assertNotIn('code', rejected)
+        self.assertNotIn('parameter_path', rejected)
+
     def test_standard_default_ignores_inactive_window_drafts(self):
         parsed = self.api.parse_window_params({'start_depth_nm': True, 'depth_reference': 'draft', 'directionality_percent': float('nan')})
         self.assertEqual(parsed.etch_mode, 'Standard')

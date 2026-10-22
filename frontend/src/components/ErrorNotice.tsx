@@ -15,6 +15,13 @@ interface ErrorNoticeProps {
 }
 
 const knownErrorKeys: Record<string, TranslationKey> = {
+  depth_window_no_effective_opening: 'error.depthWindowNoOpening',
+  depth_window_no_nonempty_rim: 'error.depthWindowNoRim',
+  depth_window_band_outside_domain: 'error.depthWindowOutsideDomain',
+  depth_window_no_voxel_center: 'error.depthWindowNoCenter',
+  depth_window_no_accessible_target: 'error.depthWindowNoTarget',
+  depth_window_no_effective_deletion: 'error.depthWindowNoDeletion',
+  depth_window_budget_exceeded: 'error.depthWindowBudget',
   invalid_mask_asset: 'error.invalidMask',
   invalid_coordinate_unit: 'error.invalidMask',
   invalid_mask_asset_reference: 'workbench.notFound',
