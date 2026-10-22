@@ -1,4 +1,5 @@
 import {afterEach, expect, it, vi} from 'vitest';
+import * as THREE from 'three';
 import type {TcadApi} from '../api/types';
 import {createThreeViewerRuntime} from './viewerRuntime';
 const rendered = vi.hoisted(() => ({scene:null as import('three').Scene | null,camera:null as import('three').Camera | null}));
@@ -37,4 +38,113 @@ it('owner meshes, material opacity, cached caps and picking share visibility wit
   const after=[api.getPreviewManifest,api.getMaterialStl,api.getDisplayManifest,api.getDisplayMesh,api.getDisplaySlice,api.runAll,api.runStep,api.runTo,api.setStep,api.importRecipe,api.saveRecipe].map(fn=>vi.mocked(fn!).mock.calls.length);
   expect(after).toEqual(snapshots);expect(rendered.camera).toBe(camera);expect(camera!.position.equals(position)).toBe(true);
   runtime.dispose();
+});
+
+async function cameraFixture() {
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {frames.set(++frameId, callback); return frameId;});
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+  let resize = () => {};
+  vi.stubGlobal('ResizeObserver', class {constructor(callback: () => void) {resize = callback;} observe() {} disconnect() {}});
+  const host = document.createElement('div');
+  let width = 800;
+  Object.defineProperties(host, {clientWidth: {get: () => width}, clientHeight: {value: 600}});
+  const bounds = {min: [-60, -40, 0] as const, max: [60, 40, 400] as const};
+  const visual = {materialId: 1, displayName: 'Silicon', color: [.6, .6, .6] as const, opacity: 1, metallic: 0, roughness: .5, visible: true};
+  const api = {
+    getPreviewManifest: vi.fn(async () => ({revision: 1, meshes: [{materialId: 1, name: 'Silicon', triangleCount: 1, boundingBox: bounds, visual}]})),
+    getMaterialStl: vi.fn(async () => new TextEncoder().encode('solid asymmetric\nfacet normal 0 0 1\nouter loop\nvertex -60 -40 0\nvertex 60 -40 400\nvertex -60 40 0\nendloop\nendfacet\nendsolid asymmetric').buffer),
+  } as unknown as TcadApi;
+  const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
+  const runtime = createThreeViewerRuntime(api); runtime.mount(host);
+  await runtime.loadMeshes(1);
+  const flush = () => {
+    for (const [id, callback] of [...frames]) {frames.delete(id); callback(0);}
+    const camera = rendered.camera as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+    camera.updateMatrixWorld();
+    return camera;
+  };
+  const target = new THREE.Vector3(0, 0, 200);
+  return {runtime, host, target, flush, resize: () => {width = 400; resize();}, assertLocal: () => {
+    expect(api.getPreviewManifest).toHaveBeenCalledTimes(1);
+    expect(api.getMaterialStl).toHaveBeenCalledTimes(1);
+    expect(fetcher).not.toHaveBeenCalled();
+  }};
+}
+
+const standardViews = [
+  ['top', [0, 0, 1]], ['bottom', [0, 0, -1]],
+  ['front', [0, -1, 0]], ['back', [0, 1, 0]],
+  ['left', [-1, 0, 0]], ['right', [1, 0, 0]],
+] as const;
+
+it.each(standardViews)('%s follows the Z-up axes across projection, fit and resize with finite stable screen orientation', async (view, direction) => {
+  const {runtime, target, flush, resize, assertLocal} = await cameraFixture();
+  try {
+    runtime.setStandardView(view);
+    const assertPose = () => {
+      const camera = flush();
+      // OrbitControls.makeSafe keeps polar views 1e-6 radians off the singularity.
+      expect(camera.position.clone().sub(target).normalize().distanceTo(new THREE.Vector3(...direction))).toBeLessThan(2e-6);
+      expect(camera.getWorldDirection(new THREE.Vector3()).dot(new THREE.Vector3(...direction))).toBeCloseTo(-1, 10);
+      expect(camera.up.toArray()).toEqual([0, 0, 1]);
+      for (const matrix of [camera.matrixWorld, camera.matrixWorldInverse, camera.projectionMatrix]) {
+        expect(matrix.elements.every(Number.isFinite)).toBe(true);
+        expect(Math.abs(matrix.determinant())).toBeGreaterThan(1e-12);
+      }
+      const center = target.clone().project(camera);
+      const upAxis = view === 'top' || view === 'bottom' ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+      const screenUp = target.clone().add(upAxis).project(camera);
+      expect(screenUp.y).toBeGreaterThan(center.y);
+      expect(Math.abs(screenUp.x - center.x)).toBeLessThan((screenUp.y - center.y) * 1e-5);
+      if (view === 'top' || view === 'bottom') {
+        const screenX = target.clone().add(new THREE.Vector3(1, 0, 0)).project(camera);
+        expect((screenX.x - center.x) * (view === 'top' ? 1 : -1)).toBeGreaterThan(0);
+        expect(Math.abs(screenX.y - center.y)).toBeLessThan(Math.abs(screenX.x - center.x) * 1e-5);
+      }
+      return camera;
+    };
+    assertPose();
+    for (const mode of ['orthographic', 'perspective'] as const) {
+      const previous = assertPose();
+      const screenRight = new THREE.Vector3().setFromMatrixColumn(previous.matrixWorld, 0).add(target);
+      const before = screenRight.clone().project(previous);
+      runtime.setProjection(mode);
+      const after = screenRight.clone().project(assertPose());
+      expect(after.x).toBeCloseTo(before.x, 8);
+      expect(after.y).toBeCloseTo(before.y, 8);
+      runtime.fit(); assertPose();
+      resize(); assertPose();
+      runtime.fit();
+      const fitted = assertPose();
+      for (const x of [-60, 60]) for (const y of [-40, 40]) for (const z of [0, 400]) {
+        const point = new THREE.Vector3(x, y, z).project(fitted);
+        expect(Math.abs(point.x)).toBeLessThanOrEqual(1.00001);
+        expect(Math.abs(point.y)).toBeLessThanOrEqual(1.00001);
+      }
+      runtime.setStandardView('iso');
+      runtime.setStandardView(view); assertPose();
+    }
+    assertLocal();
+  } finally {runtime.dispose();}
+});
+
+it.each(['top', 'bottom'] as const)('%s keeps real OrbitControls drag active after camera rebinds with no API calls', async view => {
+  const {runtime, host, flush, assertLocal} = await cameraFixture();
+  try {
+    runtime.setStandardView(view);
+    runtime.setProjection('orthographic'); runtime.setProjection('perspective');
+    const canvas = host.querySelector('canvas')!;
+    Object.defineProperty(canvas, 'clientHeight', {value: 600});
+    canvas.setPointerCapture = vi.fn(); canvas.releasePointerCapture = vi.fn();
+    const before = flush().quaternion.clone();
+    const pointer = (name: string, x: number, y: number) => new MouseEvent(name, {bubbles: true, button: 0, clientX: x, clientY: y});
+    const dispatch = (name: string, x: number, y: number) => (name === 'pointerdown' ? canvas : document).dispatchEvent(Object.assign(pointer(name, x, y), {pointerId: 1, pointerType: 'mouse'}));
+    dispatch('pointerdown', 200, 200); dispatch('pointermove', 260, view === 'top' ? 160 : 240); dispatch('pointerup', 260, 160);
+    expect(flush().quaternion.angleTo(before)).toBeGreaterThan(.05);
+    expect(canvas.setPointerCapture).toHaveBeenCalledTimes(1);
+    expect(canvas.releasePointerCapture).toHaveBeenCalledTimes(1);
+    assertLocal();
+  } finally {runtime.dispose();}
 });

@@ -45,10 +45,10 @@ export interface ViewerRuntime {
 
 const VIEW_DIRECTIONS: Record<StandardView, THREE.Vector3> = {
   iso: new THREE.Vector3(1, 0.7, 1).normalize(),
-  top: new THREE.Vector3(0, 1, 0),
-  bottom: new THREE.Vector3(0, -1, 0),
-  front: new THREE.Vector3(0, 0, 1),
-  back: new THREE.Vector3(0, 0, -1),
+  top: new THREE.Vector3(0, 0, 1),
+  bottom: new THREE.Vector3(0, 0, -1),
+  front: new THREE.Vector3(0, -1, 0),
+  back: new THREE.Vector3(0, 1, 0),
   left: new THREE.Vector3(-1, 0, 0),
   right: new THREE.Vector3(1, 0, 0),
 };
