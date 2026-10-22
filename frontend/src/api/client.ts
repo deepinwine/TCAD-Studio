@@ -443,8 +443,7 @@ export function createTcadApi(): TcadApi {
       );
     },
     exportRecipe(scope: string = 'current', signal?: AbortSignal): Promise<Blob> {
-      return apiBinary(`/api/recipe/export?scope=${encodeURIComponent(scope)}`, signal)
-        .then(buffer => new Blob([buffer], {type: 'application/json'}));
+      return apiBlob(`/api/recipe/export?scope=${encodeURIComponent(scope)}`, signal);
     },
     loadRecipe(id: string, signal?: AbortSignal): Promise<RecipeLoadView> {
       return apiPostJson(

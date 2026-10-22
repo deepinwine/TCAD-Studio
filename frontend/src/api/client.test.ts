@@ -279,6 +279,54 @@ describe('JSON client boundary', () => {
   });
 });
 
+describe('recipe export client boundary', () => {
+  it('returns bare JSON recipes verbatim as a Blob without requiring an ok envelope', async () => {
+    const original = JSON.stringify({
+      version: 1, name: '新建配方', exported_at: '2026-10-22T00:00:00Z',
+      domain: {grid_shape: [64, 32, 64], voxel_size_nm: 5}, ui_state: {},
+      steps_full: [{name: 'Initialize Wafer', params: {material: 'Silicon', thickness_nm: 200}}],
+    }, null, 2);
+    const fetcher = vi.fn().mockResolvedValue(new Response(original, {
+      status: 200, headers: {'Content-Type': 'application/json; charset=utf-8'},
+    }));
+    vi.stubGlobal('fetch', fetcher);
+    const signal = new AbortController().signal;
+
+    const blob = await createTcadApi().exportRecipe('current /完整', signal);
+
+    expect(await blob.text()).toBe(original);
+    expect(blob.type).toBe('application/json;charset=utf-8');
+    expect(fetcher).toHaveBeenCalledWith('/api/recipe/export?scope=current%20%2F%E5%AE%8C%E6%95%B4', {
+      method: 'GET', credentials: 'same-origin', signal,
+    });
+  });
+
+  it('preserves structured HTTP JSON error code and parameter path', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({
+      ok: false, code: 'invalid_scope', error: 'Unknown export scope', parameter_path: 'scope',
+    }, {status: 400, headers: {'Content-Type': 'application/json; charset=utf-8'}})));
+
+    await expect(createTcadApi().exportRecipe('invalid')).rejects.toMatchObject({
+      status: 400, code: 'invalid_scope', parameterPath: 'scope', message: 'Unknown export scope',
+    });
+  });
+
+  it('preserves fetch and body AbortError and safely reports body read failures', async () => {
+    const aborted = new DOMException('The operation was aborted.', 'AbortError');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(aborted));
+    await expect(createTcadApi().exportRecipe()).rejects.toBe(aborted);
+
+    const response = new Response('{}', {headers: {'Content-Type': 'application/json'}});
+    vi.spyOn(response, 'blob').mockRejectedValueOnce(aborted)
+      .mockRejectedValueOnce(new Error('secret=/private/recipe.json'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+    await expect(createTcadApi().exportRecipe()).rejects.toBe(aborted);
+    await expect(createTcadApi().exportRecipe()).rejects.toMatchObject({
+      status: 200, code: 'binary_read_failed', message: '无法读取 TCAD 二进制资源。', causeValue: undefined,
+    });
+  });
+});
+
 describe('binary client boundary', () => {
   it('成功返回 ArrayBuffer', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]), {
