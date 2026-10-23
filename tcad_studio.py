@@ -42,6 +42,7 @@ def main() -> int:
         storage_root=str(storage),
         host="127.0.0.1",
         port=port,
+        startup_recipe_mode="structure",
     )
     browser_timer = None
     try:

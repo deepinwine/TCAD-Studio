@@ -37377,7 +37377,10 @@ def _webui_worker_main(
     ephemeral: bool = False,
     preview_quality: str = "high",
     default_domain: Optional[Dict[str, Any]] = None,
+    startup_recipe_mode: str = "legacy",
 ) -> None:
+    if not isinstance(startup_recipe_mode, str) or startup_recipe_mode not in ("legacy", "structure"):
+        raise ValueError("startup_recipe_mode must be 'legacy' or 'structure'")
     storage_dir = Path(storage_dir_str)
     storage_dir.mkdir(parents=True, exist_ok=True)
     from mask_assets.transaction import MaskApplyTransaction
@@ -58656,16 +58659,25 @@ def _webui_worker_main(
         except Exception:
             return False
 
-    def _initialize_default_recipe(*, reset_model: bool = False) -> None:
+    def _initialize_default_recipe(*, reset_model: bool = False, structure: bool = False) -> None:
         nonlocal steps, model, model_revision, current_recipe_name, current_recipe_id, current_ui_state
-        # Share the startup ten-step Untitled semantics. A deleted recipe must
-        # also lose its substrate/material state, which configure_domain retains.
-        fresh_steps = _webui_default_recipe(material_db)
-        try:
-            for st in fresh_steps:
-                _webui_apply_admin_step_defaults(st, admin_cfg)
-        except Exception:
-            pass
+        # Only a fresh Structure startup uses the same minimal wafer as recipe_new.
+        # Deletion keeps the legacy ten-step reset and a separate fresh model.
+        if structure:
+            init_step = PROCESS_STEP_FACTORIES["Initialize Wafer"](material_db)
+            _webui_apply_admin_step_defaults(init_step, admin_cfg)
+            init_step.params["thickness_nm"] = min(
+                float(init_step.params["thickness_nm"]),
+                float(default_domain_shape[2]) * float(default_domain_voxel_nm) * 0.5,
+            )
+            fresh_steps = [init_step]
+        else:
+            fresh_steps = _webui_default_recipe(material_db)
+            try:
+                for st in fresh_steps:
+                    _webui_apply_admin_step_defaults(st, admin_cfg)
+            except Exception:
+                pass
         fresh_model = model
         if reset_model:
             fresh_model = ProcessModel(
@@ -58686,6 +58698,9 @@ def _webui_worker_main(
                             pass
         except Exception:
             pass
+        if structure:
+            fresh_model.substrate_material = _resolve_material_name_any(material_db, init_step.params["material"]) or "Silicon"
+            fresh_model.substrate_thickness_nm = float(init_step.params["thickness_nm"])
         if not reset_model:
             _set_threads_quiet(default_domain_threads)
             try:
@@ -58695,6 +58710,10 @@ def _webui_worker_main(
                     fresh_model.configure_domain(safe_shape, safe_voxel_nm)
                 except Exception:
                     fresh_model.reset_state()
+        if structure:
+            # Initialize the wafer once through its existing factory implementation;
+            # restored recipes never enter this branch or execute on startup.
+            init_step.execute(fresh_model)
         if reset_model:
             old_model = model
             model = fresh_model
@@ -58801,7 +58820,7 @@ def _webui_worker_main(
             if best_id:
                 loaded = _load_recipe_entry(best_id)
     if not loaded or not current_recipe_id:
-        _initialize_default_recipe()
+        _initialize_default_recipe(structure=startup_recipe_mode == "structure")
 
     # -----------------------------------------------------------------------
     # Large-grid memory controls
@@ -73885,6 +73904,7 @@ def _webui_start_inprocess_worker(
     preview_quality: str,
     default_domain: Optional[Dict[str, Any]],
     thread_name: str,
+    startup_recipe_mode: str = "legacy",
 ) -> Tuple[_ThreadWorkerProcess, _QueueDuplexConn]:
     q_to_worker: "queue.Queue[Any]" = queue.Queue()
     q_to_parent: "queue.Queue[Any]" = queue.Queue()
@@ -73894,7 +73914,7 @@ def _webui_start_inprocess_worker(
 
     def _run() -> None:
         try:
-            _webui_worker_main(child_conn, str(storage_dir), bool(ephemeral), str(preview_quality), dict(default_domain) if isinstance(default_domain, dict) else {})
+            _webui_worker_main(child_conn, str(storage_dir), bool(ephemeral), str(preview_quality), dict(default_domain) if isinstance(default_domain, dict) else {}, startup_recipe_mode)
             exitcode_box["exitcode"] = 0
         except SystemExit as exc:  # pragma: no cover
             try:
@@ -76563,7 +76583,11 @@ class WebUIServerManager:
         default_domain: Optional[Dict[str, Any]] = None,
         storage_root: Optional[Path] = None,
         studio_dist_dir: Optional[Path] = None,
+        startup_recipe_mode: str = "legacy",
     ) -> None:
+        if not isinstance(startup_recipe_mode, str) or startup_recipe_mode not in ("legacy", "structure"):
+            raise ValueError("startup_recipe_mode must be 'legacy' or 'structure'")
+        self.startup_recipe_mode = startup_recipe_mode
         self.host = host
         self.port = int(port)
         self.max_users = max(1, int(max_users))
@@ -77370,7 +77394,7 @@ class WebUIServerManager:
                 try:
                     pr0 = ctx0.Process(
                         target=_webui_worker_main,
-                        args=(cconn0, str(storage_dir), bool(ephemeral), str(self.preview_quality), dict(self.default_domain)),
+                        args=(cconn0, str(storage_dir), bool(ephemeral), str(self.preview_quality), dict(self.default_domain), self.startup_recipe_mode),
                         daemon=True,
                     )
                     pr0.start()
@@ -77475,6 +77499,7 @@ class WebUIServerManager:
                     ephemeral=bool(ephemeral),
                     preview_quality=str(self.preview_quality),
                     default_domain=dict(self.default_domain),
+                    startup_recipe_mode=self.startup_recipe_mode,
                     thread_name=f"WebUIWorker:{sid}",
                 )
             sess = WebUISession(

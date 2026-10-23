@@ -1,5 +1,10 @@
 """M12：桌面启动器冒烟测试。"""
 import os
+import base64
+import inspect
+import json
+import multiprocessing
+from contextlib import contextmanager
 import socketserver
 import tempfile
 import threading
@@ -53,6 +58,7 @@ class LauncherLifecycleTests(unittest.TestCase):
         self.factory.assert_called_once_with(
             storage_root=str(Path(self.temp_dir.name) / ".tcad-studio"),
             host="127.0.0.1", port=18765,
+            startup_recipe_mode="structure",
         )
         self.timer_factory.assert_not_called()
         self.browser.assert_not_called()
@@ -136,6 +142,279 @@ class LauncherLifecycleTests(unittest.TestCase):
         self.assertIs(caught.exception, error)
         self.factory.assert_not_called()
         self.manager.stop.assert_not_called()
+
+
+class StudioStartupRecipeTests(unittest.TestCase):
+    domain = {"grid_shape": [12, 12, 16], "voxel_size_nm": 5.0, "threads": 1}
+
+    @contextmanager
+    def _storage(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.managers = []
+            try:
+                yield root
+            finally:
+                for manager in self.managers:
+                    manager.stop()
+
+    def _manager(self, root, mode="structure", backend="inprocess"):
+        import tcad_simulator as tcad
+        options = {} if mode is None else {"startup_recipe_mode": mode}
+        manager = tcad.WebUIServerManager(
+            host="127.0.0.1", port=0, storage_root=Path(root),
+            default_domain=self.domain, enable_ai_agent=False, **options,
+        )
+        manager._force_inprocess_worker = backend == "inprocess"
+        self.managers.append(manager)
+        return manager
+
+    def _rpc(self, session, command, payload=None):
+        response = session.rpc(command, payload or {}, timeout_s=30.0)
+        self.assertTrue(response["ok"], response)
+        return response["result"]
+
+    def _session(self, manager, previous=None):
+        options = {} if previous is None else {
+            "session_id": previous.session_id, "secret": previous.secret,
+        }
+        session, _cookie = manager.create_session(**options)
+        self.assertIsNotNone(session)
+        return session
+
+    def _geometry(self, session):
+        manifest = self._rpc(session, "structure_display_manifest")
+        slices = [self._rpc(session, "structure_display_slice", {
+            "revision": manifest["revision"], "axis": "Z", "index": index,
+        }) for index in range(self.domain["grid_shape"][2])]
+        return manifest["owner_step_ids"], [(item["material"], item["owner"]) for item in slices]
+
+    def _assert_single_wafer(self, session):
+        import tcad_simulator as tcad
+        current = self._rpc(session, "init")
+        self.assertEqual([step["name"] for step in current["recipe"]], ["Initialize Wafer"])
+        step = current["recipe"][0]
+        self.assertEqual(step["params"]["thickness_nm"], 40.0)
+        material = tcad.MaterialDatabase().id_for("Silicon")
+        self.assertEqual(step["params"]["material"], material)
+        self.assertEqual(current["model"]["substrate_material"], "Silicon")
+        self.assertEqual(current["model"]["substrate_thickness_nm"], step["params"]["thickness_nm"])
+        self.assertFalse(any(item["snapshot_valid"] for item in self._rpc(session, "timeline_get")["items"]))
+        _owners, slices = self._geometry(session)
+        for index, (slc, _owner) in enumerate(slices):
+            values = memoryview(base64.b64decode(slc["data_b64"])).cast("H")
+            self.assertEqual(set(values), {material if index < 8 else 0})
+        return current
+
+    def test_new_structure_session_has_matching_wafer_and_air_then_builds_with_factory(self):
+        with self._storage() as root:
+            session = self._session(self._manager(root))
+            current = self._assert_single_wafer(session)
+            self.assertIn("Structure Deposit", current["recipe_factories"])
+            self._rpc(session, "recipe_add", {
+                "name": "Structure Deposit", "params": {"material": "Germanium", "thickness_nm": 10},
+            })
+            self._rpc(session, "run_step", {"index": 1})
+            owners, _slices = self._geometry(session)
+            self.assertTrue(owners)
+            self.assertEqual(len(self._rpc(session, "init")["recipe"]), 2)
+
+    def test_tall_structure_domain_keeps_factory_thickness_instead_of_half_height(self):
+        self.domain = {"grid_shape": [12, 12, 100], "voxel_size_nm": 5.0, "threads": 1}
+        with self._storage() as root:
+            session = self._session(self._manager(root))
+            current = self._rpc(session, "init")
+            self.assertEqual(current["recipe"][0]["params"]["thickness_nm"], 200.0)
+            self.assertEqual(current["model"]["substrate_thickness_nm"], 200.0)
+            for index, material in ((39, 1), (40, 0), (99, 0)):
+                slc = self._rpc(session, "slice", {"axis": "Z", "index": index})
+                self.assertEqual(set(memoryview(base64.b64decode(slc["data_b64"])).cast("H")), {material})
+
+    def test_structure_mode_keeps_legacy_reset_when_deleting_the_only_project(self):
+        with self._storage() as root:
+            session = self._session(self._manager(root))
+            initial = self._assert_single_wafer(session)
+            self._rpc(session, "recipe_delete", {"id": initial["current_recipe"]["id"]})
+            current = self._rpc(session, "init")
+            self.assertEqual(len(current["recipe"]), 10)
+            self.assertEqual(current["current_recipe"]["name"], "Untitled")
+            self.assertNotEqual(current["recipe"][0]["step_id"], initial["recipe"][0]["step_id"])
+
+    def test_default_manager_and_old_five_argument_worker_keep_ten_steps(self):
+        import tcad_simulator as tcad
+        with self._storage() as root:
+            self.assertEqual(len(self._rpc(self._session(self._manager(root, mode=None)), "init")["recipe"]), 10)
+        with tempfile.TemporaryDirectory() as root:
+            class Connection:
+                commands = iter([{"cmd": "init", "rid": 1}, {"cmd": "shutdown", "rid": 2}])
+                responses = []
+                def recv(self):
+                    return next(self.commands)
+                def send(self, response):
+                    self.responses.append(response)
+            connection = Connection()
+            tcad._webui_worker_main(connection, root, True, "high", self.domain)
+            self.assertEqual(len(connection.responses[0]["result"]["recipe"]), 10)
+
+    def test_invalid_mode_is_rejected_before_storage_or_thread_side_effects(self):
+        import tcad_simulator as tcad
+        parameter = inspect.signature(tcad.WebUIServerManager).parameters["startup_recipe_mode"]
+        self.assertEqual(parameter.kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertEqual(parameter.default, "legacy")
+        with tempfile.TemporaryDirectory() as root:
+            for mode in ("invalid", "STRUCTURE", "", None, []):
+                with self.subTest(mode=mode), patch("tcad_simulator._tcad_ensure_writable_dir") as storage, \
+                        patch("tcad_simulator.threading.Thread") as thread:
+                    with self.assertRaises(ValueError):
+                        tcad.WebUIServerManager(storage_root=Path(root) / "new", startup_recipe_mode=mode)
+                    storage.assert_not_called()
+                    thread.assert_not_called()
+                    self.assertFalse((Path(root) / "new").exists())
+
+    def test_spawn_creates_real_structure_session(self):
+        import tcad_simulator as tcad
+        if "spawn" not in multiprocessing.get_all_start_methods() or not tcad._tcad_can_spawn_webui_worker():
+            self.skipTest("spawn is unavailable in this runtime")
+        with self._storage() as root:
+            manager = self._manager(root, backend="spawn")
+            session = self._session(manager)
+            self.assertIsInstance(session.process, multiprocessing.process.BaseProcess)
+            self.assertEqual(session.process._start_method, "spawn")
+            self._assert_single_wafer(session)
+
+    def test_failed_process_creation_falls_back_to_real_inprocess_structure_worker(self):
+        import tcad_simulator as tcad
+        with self._storage() as root:
+            manager = self._manager(root, backend="spawn")
+            with patch("tcad_simulator._tcad_can_spawn_webui_worker", return_value=True), \
+                    patch("tcad_simulator._tcad_can_fork_webui_worker", return_value=False), \
+                    patch.object(multiprocessing.get_context("spawn"), "Process", side_effect=OSError("cannot create process")):
+                session = self._session(manager)
+            self.assertTrue(manager._force_inprocess_worker)
+            self.assertIsInstance(session.process, tcad._ThreadWorkerProcess)
+            self._assert_single_wafer(session)
+
+    def test_new_structure_session_applies_admin_wafer_configuration_to_real_layers(self):
+        import tcad_simulator as tcad
+        with self._storage() as root:
+            manager = self._manager(root)
+            tcad._library_save_admin_config(Path(root), {"process_steps": {"Initialize Wafer": {"roles": {
+                "material": {"default_material": "Germanium"},
+            }}}})
+            session = self._session(manager)
+            current = self._rpc(session, "init")
+            self.assertEqual(len(current["recipe"]), 1)
+            params = current["recipe"][0]["params"]
+            self.assertEqual(params["thickness_nm"], 40.0)
+            material_db = tcad.MaterialDatabase()
+            self.assertEqual(params["material"], material_db.id_for("Germanium"))
+            _owners, slices = self._geometry(session)
+            expected = [material_db.id_for("Germanium")] * 8 + [0] * 8
+            for (slc, _owner), material in zip(slices, expected):
+                values = memoryview(base64.b64decode(slc["data_b64"])).cast("H")
+                self.assertEqual(set(values), {material})
+
+    def _restart_preserving(self, root, manager, session, conflicting_autosave=False):
+        import tcad_simulator as tcad
+        before = self._rpc(session, "init")
+        geometry = self._geometry(session)
+        manager.stop()
+        autosave_path = session.storage_dir / "autosave.pkl.gz"
+        if conflicting_autosave:
+            decoy = tcad._webui_pickle_load(autosave_path)
+            decoy["recipe_name"] = "Must not replace the active project"
+            tcad._webui_pickle_dump(autosave_path, decoy)
+        if before["recipe"] == []:
+            # An explicit empty full list must outrank a stale legacy list at bootstrap.
+            recipe_id = before["current_recipe"]["id"]
+            for path in (autosave_path, session.storage_dir / "history" / (recipe_id + ".pkl.gz"),
+                         session.storage_dir / "history" / (recipe_id + ".autosave.pkl.gz")):
+                if path.exists():
+                    blob = tcad._webui_pickle_load(path)
+                    self.assertEqual(blob["steps_full"], [])
+                    blob["steps"] = [{"name": "Structure Deposit", "params": {"thickness_nm": 10}}]
+                    tcad._webui_pickle_dump(path, blob)
+        resumed = self._session(self._manager(root), previous=session)
+        after = self._rpc(resumed, "init")
+        for key in ("current_recipe", "model", "ui_state"):
+            self.assertEqual(after[key], before[key])
+        fields = ("name", "params", "instance_name", "enabled", "step_id")
+        # Existing restore canonicalizes material names to IDs; compare their meaning.
+        material_db = tcad.MaterialDatabase()
+        for step in before["recipe"]:
+            for key, value in step["params"].items():
+                if (key == "material" or key.endswith("_material")) and isinstance(value, str) and value in material_db.names():
+                    step["params"][key] = material_db.id_for(value)
+        self.assertEqual([{key: step[key] for key in fields} for step in after["recipe"]],
+                         [{key: step[key] for key in fields} for step in before["recipe"]])
+        self.assertEqual(self._geometry(resumed), geometry)
+        return resumed
+
+    def test_structure_startup_resumes_physical_project_without_migration_or_execution(self):
+        with self._storage() as root:
+            manager = self._manager(root, mode=None)
+            session = self._session(manager)
+            self._rpc(session, "set_step", {
+                "index": 0, "params": {"material": "Germanium", "thickness_nm": 20},
+                "instance_name": "旧晶圆",
+            })
+            self._rpc(session, "set_step", {"index": 1, "enabled": False, "instance_name": "保留物理步骤"})
+            self._rpc(session, "run_step", {"index": 0})
+            current = self._rpc(session, "init")
+            self._rpc(session, "ui_state", {"recipe_id": current["current_recipe"]["id"],
+                                           "ui_state": {"selectedStepIndex": 1, "camera": {"zoom": 2}}})
+            resumed = self._restart_preserving(root, manager, session, conflicting_autosave=True)
+            self.assertEqual(len(self._rpc(resumed, "init")["recipe"]), 10)
+
+    def test_structure_and_authoritative_empty_projects_resume_geometry_source_and_drafts(self):
+        import tcad_simulator as tcad
+        for empty in (False, True):
+            with self.subTest(empty=empty), self._storage() as root:
+                manager = self._manager(root, mode=None)
+                session = self._session(manager)
+                self._rpc(session, "recipe_new", {"name": "结构项目"})
+                self._rpc(session, "recipe_add", {
+                    "name": "Structure Deposit", "params": {"material": "Germanium", "thickness_nm": 10},
+                })
+                self._rpc(session, "run_step", {"index": 1})
+                self._rpc(session, "recipe_add", {
+                    "name": "Structure Etch", "params": {"lower_z_nm": "未活动草稿"},
+                })
+                if empty:
+                    for index in (2, 1, 0):
+                        self._rpc(session, "recipe_remove", {"index": index})
+                else:
+                    self.assertTrue(self._geometry(session)[0])
+                self._rpc(session, "recipe_save")
+                resumed = self._restart_preserving(root, manager, session)
+                if empty:
+                    self.assertEqual(self._rpc(resumed, "init")["recipe"], [])
+                    blob = tcad._webui_pickle_load(resumed.storage_dir / "autosave.pkl.gz")
+                    self.assertEqual(blob["steps_full"], [])
+                else:
+                    self.assertEqual(self._rpc(resumed, "init")["recipe"][2]["params"]["lower_z_nm"], "未活动草稿")
+
+    def test_structure_startup_falls_back_to_autosave_then_recent_history(self):
+        for fallback in ("autosave", "history"):
+            with self.subTest(fallback=fallback), self._storage() as root:
+                manager = self._manager(root, mode=None)
+                session = self._session(manager)
+                self._rpc(session, "set_step", {"index": 0, "params": {"material": "Germanium", "thickness_nm": 20}})
+                self._rpc(session, "run_step", {"index": 0})
+                self._rpc(session, "recipe_save", {"name": "恢复回退"})
+                before = self._rpc(session, "init")
+                geometry = self._geometry(session)
+                manager.stop()
+                pointer = session.storage_dir / "session_state.json"
+                pointer.write_text(json.dumps({"last_active_recipe_id": "missing"}), encoding="utf-8")
+                if fallback == "history":
+                    (session.storage_dir / "autosave.pkl.gz").unlink()
+                resumed = self._session(self._manager(root), previous=session)
+                current = self._rpc(resumed, "init")
+                self.assertEqual(current["current_recipe"], before["current_recipe"])
+                self.assertEqual([step["name"] for step in current["recipe"]],
+                                 [step["name"] for step in before["recipe"]])
+                self.assertEqual(current["model"], before["model"])
+                self.assertEqual(self._geometry(resumed), geometry)
 
 
 class LauncherShutdownPersistenceTests(unittest.TestCase):

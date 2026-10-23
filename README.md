@@ -524,6 +524,12 @@ with the server-authoritative timeline (the server may have finished the run).
 React + TypeScript + Vite 客户端位于 `frontend/`，通过冻结的 M2 Compatibility API
 访问同一个 WebUI 后端。旧 WebUI（`/`）保持不变；React 客户端在同源路径 `/studio/` 提供。
 
+运行 `python3 tcad_studio.py` 启动 Studio。没有可恢复记录的新会话仅创建一个
+`Initialize Wafer` 步骤，可继续添加 Structure 工艺；小 domain 会为后续生长预留空间。
+启动时仍优先恢复会话上次项目，再尝试 autosave 和最近历史；既有物理、结构及空配方
+保留原步骤与模型，不自动迁移或执行。直接使用 `WebUIServerManager` 时默认保留旧十步
+配方；调用方可显式传入 `startup_recipe_mode="structure"` 使用相同的新启动默认。
+
 M5 补齐了核心工艺编辑对等能力：撤销/重做（几何与时间线联动重同步）、配方管理
 （Demo 加载/新建/保存/导出下载/导入）、步骤结构编辑（添加/删除/复制/移动/重命名）、
 Exposure 步骤的掩膜上传与预览——全部通过冻结契约端点实现。
