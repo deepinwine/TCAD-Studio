@@ -7,6 +7,7 @@ import type {TranslationKey} from '../i18n/catalogs';
 import type {TcadApi} from '../api/types';
 import {ProjectSettings} from './ProjectSettings';
 import {isStructureFlow} from './processCatalog';
+import {ErrorNotice} from './ErrorNotice';
 
 interface ToolbarProps {
   api?: TcadApi;
@@ -35,6 +36,7 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
   const [projectOpen, setProjectOpen] = useState(false);
   const [demoChoice, setDemoChoice] = useState('');
   const [recipeName, setRecipeName] = useState('');
+  const [importFileError, setImportFileError] = useState<'read' | 'json' | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const demoRecipes = state.demoRecipes;
   const structureMode = isStructureFlow(state.recipe);
@@ -54,6 +56,26 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
   const selectedMissing = state.selectedStepIndex === null;
   const allRunsDisabled = mutationActive || draftBlocked || state.pendingSaves > 0 || state.pendingTypeEdits.length > 0;
   const describedBy = draftBlocked ? draftGuidanceId : undefined;
+
+  async function importFile(file: File) {
+    setImportFileError(null);
+    let content: string;
+    try {
+      content = await file.text();
+    } catch {
+      setImportFileError('read');
+      return;
+    }
+    let recipe: unknown;
+    try {
+      recipe = JSON.parse(content);
+    } catch {
+      setImportFileError('json');
+      return;
+    }
+    await actions.importRecipe({recipe});
+  }
+
   return (
     <header className="studio-toolbar">
       <div className="product-lockup">
@@ -198,15 +220,19 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
           className="visually-hidden"
           onChange={event => {
             const file = event.target.files?.[0];
-            if (file !== undefined) {
-              void file.text().then(content => {
-                actions.importRecipe({recipe: JSON.parse(content)});
-              });
-            }
             event.target.value = '';
+            if (file !== undefined) {
+              void importFile(file);
+            }
           }}
         />
         </div>
+        {importFileError !== null && (
+          <ErrorNotice
+            title={t('error.operationTitle')}
+            message={t(importFileError === 'read' ? 'toolbar.importFileReadError' : 'toolbar.importFileJsonError')}
+          />
+        )}
         {draftBlocked && (
           <span id={draftGuidanceId} className="toolbar-gate-copy" role="status">
             {t('toolbar.draftGuidance')}

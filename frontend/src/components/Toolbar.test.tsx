@@ -1,4 +1,4 @@
-import {fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {describe, expect, it, vi} from 'vitest';
 import {App} from '../App';
 import {TcadApiError} from '../api/client';
@@ -262,6 +262,184 @@ describe('Toolbar 配方管理', () => {
     fireEvent.change(nameInput, {target: {value: 'My Process'}});
     fireEvent.click(screen.getByRole('button', {name: '新建配方'}));
     await waitFor(() => expect(api.newRecipe).toHaveBeenCalledWith('My Process', expect.any(AbortSignal)));
+  });
+});
+
+describe('Toolbar 本地配方文件错误', () => {
+  const jsonError = '配方文件不是有效的 JSON，请检查文件后重试。';
+  const readError = '无法读取配方文件，请重新选择文件后重试。';
+
+  async function openImport(api = apiStub()) {
+    const mount = vi.fn();
+    const dispose = vi.fn();
+    const loadMeshes = vi.fn(async () => ({warnings: [], materials: []}));
+    render(<App api={api} viewerRuntimeFactory={() => ({...stubViewerRuntime(), mount, dispose, loadMeshes})} />);
+    await waitFor(() => expect(screen.getByRole('button', {name: '恢复步骤 1'})).toBeEnabled());
+    await waitFor(() => expect(loadMeshes).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', {name: '配方操作'}));
+    return {api, mount, dispose, loadMeshes, input: screen.getByLabelText('导入配方文件') as HTMLInputElement};
+  }
+
+  function callCounts(api: TcadApi) {
+    return Object.fromEntries(Object.entries(api).map(([name, method]) => [name, vi.mocked(method).mock.calls.length]));
+  }
+
+  it('坏 JSON 只显示安全提示，保留步骤、选择、Timeline 和 Viewer', async () => {
+    const apiWithResult = apiStub({
+      getTimeline: vi.fn(async () => ({...initialTimeline, items: initialTimeline.items.map(item => ({...item, runtimeStatus: 'done' as const}))})),
+      init: vi.fn(async () => initView([
+        step(0),
+        step(1, {
+          name: 'Structure Etch',
+          params: {etch_mode: 'Depth window', depth_reference: 'Opening plane'},
+          parameterSpecs: [],
+          runtimeStatus: 'done',
+          executionResult: {referenceZNm: 250},
+        }),
+      ])),
+    });
+    const {api, input, mount, dispose, loadMeshes} = await openImport(apiWithResult);
+    fireEvent.click(screen.getByRole('option', {name: /Step 2/}));
+    expect(screen.getByText('250 nm')).toBeVisible();
+    const options = screen.getAllByRole('option').map(option => option.textContent);
+    const timeline = screen.getByRole('navigation', {name: 'Process Timeline'}).textContent;
+    const counts = callCounts(api);
+    fireEvent.change(input, {target: {files: [new File(['{"private":"secret-recipe",'], 'private.json')]}});
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(jsonError);
+    expect(alert).toHaveTextContent('操作失败');
+    expect(alert).not.toHaveTextContent(/secret-recipe|private.json|SyntaxError/);
+    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual(options);
+    expect(screen.getByRole('option', {name: /Step 2/})).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('250 nm')).toBeVisible();
+    expect(screen.getByRole('navigation', {name: 'Process Timeline'})).toHaveTextContent(timeline!);
+    expect(callCounts(api)).toEqual(counts);
+    expect(loadMeshes).toHaveBeenCalledTimes(1);
+    expect(mount).toHaveBeenCalledTimes(1);
+    expect(dispose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', {name: '配方操作'}));
+    expect(alert).toBeVisible();
+  });
+
+  it('空文件显示 JSON 错误，不发送写请求', async () => {
+    const {api, input} = await openImport();
+    const counts = callCounts(api);
+    fireEvent.change(input, {target: {files: [new File([''], 'empty.json')]}});
+    expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+    expect(callCounts(api)).toEqual(counts);
+  });
+
+  it('读取拒绝显示读取错误且不泄漏路径', async () => {
+    const {api, input} = await openImport();
+    const counts = callCounts(api);
+    const file = new File(['{}'], 'recipe.json');
+    const text = vi.spyOn(file, 'text').mockRejectedValue(new Error('/private/secret-file.json'));
+    try {
+      fireEvent.change(input, {target: {files: [file]}});
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(readError);
+      expect(alert).not.toHaveTextContent(/private|secret-file|Error:/);
+      fireEvent.click(screen.getByRole('button', {name: 'EN'}));
+      expect(alert).toHaveTextContent('Unable to read the recipe file. Select the file again and retry.');
+      fireEvent.click(screen.getByRole('button', {name: '中文'}));
+      expect(alert).toHaveTextContent(readError);
+      expect(callCounts(api)).toEqual(counts);
+    } finally {
+      text.mockRestore();
+    }
+  });
+
+  it('错误文案随中英文切换更新且不追加请求', async () => {
+    const {api, input} = await openImport();
+    fireEvent.change(input, {target: {files: [new File(['bad'], 'recipe.json')]}});
+    expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+    const counts = callCounts(api);
+    fireEvent.click(screen.getByRole('button', {name: 'EN'}));
+    expect(screen.getByRole('alert')).toHaveTextContent('The recipe file is not valid JSON. Check the file and retry.');
+    fireEvent.click(screen.getByRole('button', {name: '中文'}));
+    expect(screen.getByRole('alert')).toHaveTextContent(jsonError);
+    expect(callCounts(api)).toEqual(counts);
+  });
+
+  it('取消选文件保留旧错误与配方', async () => {
+    const {api, input} = await openImport();
+    fireEvent.change(input, {target: {files: [new File(['bad'], 'recipe.json')]}});
+    expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+    const counts = callCounts(api);
+    fireEvent.change(input, {target: {files: []}});
+    expect(screen.getByRole('alert')).toHaveTextContent(jsonError);
+    expect(screen.getByRole('option', {name: /Step 1/})).toBeInTheDocument();
+    expect(screen.getByRole('option', {name: /Step 2/})).toBeInTheDocument();
+    expect(callCounts(api)).toEqual(counts);
+  });
+
+  it('同一个文件可重复选择，input 在每次选择后清空', async () => {
+    const {api, input} = await openImport();
+    const file = new File(['bad'], 'recipe.json');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      fireEvent.change(input, {target: {files: [file]}});
+      expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+      expect(input.value).toBe('');
+    }
+    expect(api.importRecipe).not.toHaveBeenCalled();
+  });
+
+  it('重试读取开始清旧提示，成功只导入一次，之后仍可报告失败', async () => {
+    const {api, input} = await openImport();
+    fireEvent.change(input, {target: {files: [new File(['bad'], 'bad.json')]}});
+    expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+    const pending = deferred<string>();
+    const file = new File(['{"steps":[]}'], 'valid.json');
+    const text = vi.spyOn(file, 'text').mockReturnValue(pending.promise);
+    try {
+      fireEvent.change(input, {target: {files: [file]}});
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(api.importRecipe).not.toHaveBeenCalled();
+      await act(async () => pending.resolve('{"steps":[]}'));
+      await waitFor(() => expect(screen.getByRole('button', {name: '导入配方'})).toBeEnabled());
+      expect(api.importRecipe).toHaveBeenCalledTimes(1);
+      expect(api.importRecipe).toHaveBeenCalledWith({recipe: {steps: []}, autosaveCurrent: true}, expect.any(AbortSignal));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      fireEvent.change(input, {target: {files: [new File(['bad again'], 'bad.json')]}});
+      expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+      expect(api.importRecipe).toHaveBeenCalledTimes(1);
+    } finally {
+      text.mockRestore();
+    }
+  });
+
+  it('有效 JSON 的服务端语义错误保留原有全局反馈', async () => {
+    const api = apiStub({importRecipe: vi.fn(async () => {
+      throw new TcadApiError('private server message', {status: 400, code: 'invalid_recipe'});
+    })});
+    const {input} = await openImport(api);
+    fireEvent.change(input, {target: {files: [new File(['{"steps":"invalid"}'], 'recipe.json')]}});
+    expect(await screen.findByRole('alert')).toHaveTextContent('配方无效。');
+    expect(screen.queryByText(jsonError)).not.toBeInTheDocument();
+    expect(screen.queryByText(readError)).not.toBeInTheDocument();
+    expect(api.importRecipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('本地失败保留非法参数草稿，有效 JSON 继续受 provider 门禁约束', async () => {
+    const {api, input} = await openImport();
+    const dose = screen.getByRole('textbox', {name: 'Dose'});
+    fireEvent.change(dose, {target: {value: '-1'}});
+    expect(screen.getByRole('button', {name: '导入配方'})).toBeDisabled();
+    const counts = callCounts(api);
+    // 程序触发隐藏 input 只检查文件错误边界，不代表禁用按钮可打开选择器。
+    fireEvent.change(input, {target: {files: [new File(['bad'], 'recipe.json')]}});
+    expect(await screen.findByRole('alert')).toHaveTextContent(jsonError);
+    expect(dose).toHaveValue('-1');
+    expect(screen.getByText('请先保存或修正参数')).toBeVisible();
+    expect(callCounts(api)).toEqual(counts);
+    await act(async () => {
+      fireEvent.change(input, {target: {files: [new File(['{"steps":[]}'], 'valid.json')]}});
+    });
+    expect(dose).toHaveValue('-1');
+    expect(screen.queryByText(jsonError)).not.toBeInTheDocument();
+    expect(screen.queryByText(readError)).not.toBeInTheDocument();
+    expect(callCounts(api)).toEqual(counts);
   });
 });
 
