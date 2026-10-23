@@ -35,7 +35,17 @@ export function ProjectSettings({api, onClose}: {api: TcadApi; onClose(): void})
       const domain = blob.domain as Record<string, unknown>;
       const shape = domain.grid_shape as number[];
       setGrid(shape.map(String)); setVoxel(String(domain.voxel_size_nm));
-      setTemplate({...initial, params: {...((raw.params_raw ?? raw.params) as Record<string, unknown>)}});
+      const params = {...((raw.params_raw ?? raw.params) as Record<string, unknown>)};
+      // Saved material IDs need names only when the declared editor choices use names.
+      for (const spec of initial.parameterSpecs) {
+        if (!(spec.key === 'material' || spec.key.endsWith('_material')) || !spec.choices
+          || spec.choices.some(([value]) => Object.is(value, params[spec.key]))) continue;
+        const value = params[spec.key];
+        const id = typeof value === 'number' ? value : typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : NaN;
+        const material = Number.isSafeInteger(id) && id > 0 ? state.materials.find(item => item.id === id) : undefined;
+        if (material && spec.choices.some(([choice]) => choice === material.name)) params[spec.key] = material.name;
+      }
+      setTemplate({...initial, params});
       setExported(blob);
     }).catch(() => {if (!controller.signal.aborted) setError(true);});
     return () => controller.abort();

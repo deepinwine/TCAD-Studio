@@ -34,6 +34,13 @@
 
 ## Task 2：协调者最终验收与交付
 
+浏览器验收发现并获准的独立修复（与首次启动实现分开提交）：
+
+- Modify: `frontend/src/components/ProjectSettings.tsx`、`frontend/src/components/ProjectSettingsApiIntegration.test.tsx`。
+- [ ] 使用真实 `Initialize Wafer` 响应形状回归：三个材料枚举以名称为选项，`params_raw` 保持材料 ID；先确认 BOX 显示错误和确认按钮不可用的 RED。
+- [ ] 仅在项目设置显示模板中解析受支持的材料 ID；保留原选项已匹配值、未知材料的无效状态、原始导出、SOI、未编辑字段和旧步骤。
+- [ ] 串行执行项目设置专项、完整前端测试、类型检查及构建；真实浏览器再次确认项目设置可编辑。同步规格，使用独立 `fix` 提交。
+
 - [ ] 1. 独立审查完整 diff，对照 AGENTS、ADR-027/028 与规格；完成前验证技能要求重新执行命令，不只转述实现者结果。
 - [ ] 2. 运行 `.github/workflows/ci.yml` 中当前 Compile 与 Core backend tests 的真实命令（用 Anaconda Python 和隔离缓存）；运行 AGENTS 五模块与 grid 128 基准，确认 5 demos / 39 checks。
 - [ ] 3. 前端串行执行 `npm test -- --run --maxWorkers=1 --no-file-parallelism`、`npm run typecheck`、`npm run build`，记录数目、退出码和已有警告。
