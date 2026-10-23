@@ -43,7 +43,7 @@ export function StepTypeEditor({step, onCandidateChange}: {step: StepView; onCan
     </select>
     {choice === 'Deposit' && <><label htmlFor="step-deposition-mode">{t('typeEdit.mode')}</label><select id="step-deposition-mode" disabled={busy} value={mode} onChange={event => configure(choice, event.target.value)}><option value="Deposit">{t('typeEdit.film')}</option><option value="Fill">{t('typeEdit.fill')}</option></select></>}
     <button type="button" disabled={busy || !available} onClick={() => configure(choice, mode)}>{t('typeEdit.configure')}</button>
-    {!available && <p>{t('structure.legacyServer')}</p>}
+    {choice !== '' && !available && <p>{t('structure.legacyServer')}</p>}
     {Object.entries(candidates).map(([indexText, candidate]) => {
       const index = Number(indexText);
       return <div key={`${index}:${generations[index]}`} hidden={index !== step.index}>

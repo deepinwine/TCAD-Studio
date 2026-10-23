@@ -19,6 +19,7 @@ import {processCatalog} from './processCatalog';
 import wireFactoryTemplates from '../test/structureFactoryTemplates.json';
 import {parseStepEnvelope} from '../api/schemas';
 const factoryTemplates = wireFactoryTemplates.map((template, index) => parseStepEnvelope({ok: true, result: template}, index));
+const originalLocalePreference = window.localStorage.getItem('tcad.locale.v1');
 function SelectionControls() {const {actions} = useAppState(); return <><button onClick={() => actions.selectStep(0)}>select 0</button><button onClick={() => actions.selectStep(1)}>select 1</button></>;}
 function SelectedPanel() {const {state} = useAppState(); return <ParameterPanel step={state.recipe.find(item => item.index === state.selectedStepIndex) ?? null} collapsed={false} />;}
 
@@ -150,7 +151,11 @@ describe('配置结构步骤', () => {
   });
 });
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  if (originalLocalePreference === null) window.localStorage.removeItem('tcad.locale.v1');
+  else window.localStorage.setItem('tcad.locale.v1', originalLocalePreference);
+});
 
 describe('StepStructureBar', () => {
   it('同类型重新配置确认丢弃会重置参数和名称，拒绝丢弃保留草稿', async () => {
@@ -304,6 +309,147 @@ describe('StepStructureBar', () => {
     expect(screen.queryByText(/Structure templates are unavailable/)).not.toBeInTheDocument();
     expect(api.addStep).not.toHaveBeenCalled();
     expect(api.setStep).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {label: '未提供模板元数据', templates: undefined},
+    {label: '模板列表为空', templates: []},
+    {label: '存在可用模板', templates: factoryTemplates},
+  ])('右侧旧步骤未选择新类型时（$label）不显示模板缺失提示（中文）', async ({templates}) => {
+    const source = step(0, {name: 'Legacy', instanceName: 'old layer', params: {thickness_nm: 500}});
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [source], factoryTemplates: templates}))});
+    render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><SelectedPanel /></AppStateProvider></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', {name: '中文'}));
+    await screen.findByText('当前为旧配方类型：Legacy');
+
+    expect(screen.getByLabelText('工艺类型')).toHaveValue('');
+    expect(screen.getByRole('button', {name: '配置类型'})).toBeDisabled();
+    expect(screen.queryByText(/结构工艺模板不可用/)).not.toBeInTheDocument();
+    expect(api.setStep).not.toHaveBeenCalled();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.removeStep).not.toHaveBeenCalled();
+    expect(api.runStep).not.toHaveBeenCalled();
+    expect(api.runTo).not.toHaveBeenCalled();
+    expect(api.runAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {label: '未提供模板元数据', templates: undefined},
+    {label: '模板列表为空', templates: []},
+    {label: '存在可用模板', templates: factoryTemplates},
+  ])('右侧旧步骤未选择新类型时（$label）不显示模板缺失提示（英文）', async ({templates}) => {
+    const source = step(0, {name: 'Legacy', instanceName: 'old layer', params: {thickness_nm: 500}});
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [source], factoryTemplates: templates}))});
+    render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><SelectedPanel /></AppStateProvider></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', {name: 'EN'}));
+    await screen.findByText('Current legacy type: Legacy');
+
+    expect(screen.getByLabelText('Process type')).toHaveValue('');
+    expect(screen.getByRole('button', {name: 'Configure type'})).toBeDisabled();
+    expect(screen.queryByText(/Structure templates are unavailable/)).not.toBeInTheDocument();
+    expect(api.setStep).not.toHaveBeenCalled();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.removeStep).not.toHaveBeenCalled();
+    expect(api.runStep).not.toHaveBeenCalled();
+    expect(api.runTo).not.toHaveBeenCalled();
+    expect(api.runAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {locale: '中文', legacy: '当前为旧配方类型：Legacy', warning: /结构工艺模板不可用/},
+    {locale: 'EN', legacy: 'Current legacy type: Legacy', warning: /Structure templates are unavailable/},
+  ])('旧步骤选择有模板的类型后打开候选，取消回到空选择（$locale）', async ({locale, legacy, warning}) => {
+    const source = step(0, {name: 'Legacy', instanceName: 'old layer', params: {thickness_nm: 500}});
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [source], factoryTemplates}))});
+    render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><SelectedPanel /></AppStateProvider></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', {name: locale}));
+    await screen.findByText(legacy);
+    const typeSelect = screen.getByLabelText(locale === 'EN' ? 'Process type' : '工艺类型');
+
+    fireEvent.change(typeSelect, {target: {value: 'Etch'}});
+    expect(await screen.findByText(/正在配置候选类型|Configuring a candidate/)).toBeVisible();
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    expect(api.setStep).not.toHaveBeenCalled();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.removeStep).not.toHaveBeenCalled();
+    expect(api.runStep).not.toHaveBeenCalled();
+    expect(api.runTo).not.toHaveBeenCalled();
+    expect(api.runAll).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', {name: locale === 'EN' ? 'Cancel' : '取消'}));
+    expect(typeSelect).toHaveValue('');
+    expect(screen.queryByText(/正在配置候选类型|Configuring a candidate/)).not.toBeInTheDocument();
+    expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    expect(api.setStep).not.toHaveBeenCalled();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.removeStep).not.toHaveBeenCalled();
+    expect(api.runStep).not.toHaveBeenCalled();
+    expect(api.runTo).not.toHaveBeenCalled();
+    expect(api.runAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {locale: '中文', legacy: '当前为旧配方类型：Legacy', warning: /结构工艺模板不可用/},
+    {locale: 'EN', legacy: 'Current legacy type: Legacy', warning: /Structure templates are unavailable/},
+  ])('旧步骤选择缺少模板的类型仍显示警告并禁用配置（$locale）', async ({locale, legacy, warning}) => {
+    const source = step(0, {name: 'Legacy', instanceName: 'old layer', params: {thickness_nm: 500}});
+    const deposit = factoryTemplates.find(item => item.name === 'Structure Deposit')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [source], factoryTemplates: [deposit]}))});
+    render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><SelectedPanel /></AppStateProvider></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', {name: locale}));
+    await screen.findByText(legacy);
+    const typeSelect = screen.getByLabelText(locale === 'EN' ? 'Process type' : '工艺类型');
+
+    fireEvent.change(typeSelect, {target: {value: 'Etch'}});
+    expect(screen.getByText(warning)).toBeVisible();
+    expect(screen.getByRole('button', {name: locale === 'EN' ? 'Configure type' : '配置类型'})).toBeDisabled();
+    expect(screen.queryByText(/正在配置候选类型|Configuring a candidate/)).not.toBeInTheDocument();
+    expect(api.setStep).not.toHaveBeenCalled();
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.removeStep).not.toHaveBeenCalled();
+    expect(api.runStep).not.toHaveBeenCalled();
+    expect(api.runTo).not.toHaveBeenCalled();
+    expect(api.runAll).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {locale: '中文', legacy: '当前为旧配方类型：Legacy', warning: /结构工艺模板不可用/},
+    {locale: 'EN', legacy: 'Current legacy type: Legacy', warning: /Structure templates are unavailable/},
+  ])('有候选时确认切换到缺失模板类型后可切回支持类型（$locale）', async ({locale, legacy, warning}) => {
+    const source = step(0, {name: 'Legacy', instanceName: 'old layer', params: {thickness_nm: 500}});
+    const deposit = factoryTemplates.find(item => item.name === 'Structure Deposit')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [source], factoryTemplates: [deposit]}))});
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    try {
+      render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><SelectedPanel /></AppStateProvider></I18nProvider>);
+      fireEvent.click(screen.getByRole('button', {name: locale}));
+      await screen.findByText(legacy);
+      const typeSelect = screen.getByLabelText(locale === 'EN' ? 'Process type' : '工艺类型');
+
+      fireEvent.change(typeSelect, {target: {value: 'Deposit'}});
+      expect(await screen.findByText(/正在配置候选类型|Configuring a candidate/)).toBeVisible();
+      fireEvent.change(typeSelect, {target: {value: 'Etch'}});
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(screen.getByText(warning)).toBeVisible();
+      expect(screen.queryByText(/正在配置候选类型|Configuring a candidate/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', {name: locale === 'EN' ? 'Configure type' : '配置类型'})).toBeDisabled();
+
+      fireEvent.change(typeSelect, {target: {value: 'Deposit'}});
+      expect(await screen.findByText(/正在配置候选类型|Configuring a candidate/)).toBeVisible();
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+      expect(api.setStep).not.toHaveBeenCalled();
+      expect(api.addStep).not.toHaveBeenCalled();
+      expect(api.removeStep).not.toHaveBeenCalled();
+      expect(api.runStep).not.toHaveBeenCalled();
+      expect(api.runTo).not.toHaveBeenCalled();
+      expect(api.runAll).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', {name: locale === 'EN' ? 'Cancel' : '取消'}));
+      expect(typeSelect).toHaveValue('');
+      expect(screen.queryByText(warning)).not.toBeInTheDocument();
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it('从缺少模板切换到可用类型后收起提示，空选时添加保持禁用', async () => {
