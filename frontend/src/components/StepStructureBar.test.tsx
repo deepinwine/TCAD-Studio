@@ -1,4 +1,4 @@
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {cleanup, fireEvent, render, screen, waitFor, within} from '@testing-library/react';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import type {
   InitView,
@@ -158,6 +158,70 @@ afterEach(() => {
 });
 
 describe('StepStructureBar', () => {
+  it.each([
+    {locale: '中文', type: '工艺类型', mode: '沉积模式', configure: '配置类型'},
+    {locale: 'EN', type: 'Process type', mode: 'Deposition mode', configure: 'Configure type'},
+  ])('右侧类型与沉积模式独立分组，配置操作保持独立且不提交（$locale）', async ({locale, type, mode, configure}) => {
+    const source = step(0, {name: 'Structure Deposit', instanceName: 'Structure Deposit'});
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [source], factoryTemplates}))});
+    render(<I18nProvider><AppStateProvider api={api}><LanguageSwitcher /><SelectedPanel /></AppStateProvider></I18nProvider>);
+    fireEvent.click(screen.getByRole('button', {name: locale}));
+    const typeSelect = await screen.findByLabelText(type);
+    const modeSelect = screen.getByLabelText(mode);
+    const typeField = typeSelect.closest('.step-type-field');
+    const modeField = modeSelect.closest('.step-type-field');
+    expect(typeField).not.toBeNull();
+    expect(modeField).not.toBeNull();
+    expect(typeField).not.toBe(modeField);
+    for (const [field, select] of [[typeField, typeSelect], [modeField, modeSelect]] as const) {
+      expect(field!.querySelector<HTMLLabelElement>('label')!.control).toBe(select);
+      expect(field!.querySelector('label')!.nextElementSibling).toBe(select);
+    }
+    const configureButton = screen.getByRole('button', {name: configure});
+    expect(configureButton.closest('.step-type-actions')?.parentElement).toBe(typeField!.parentElement);
+    expect(typeField!.parentElement).toHaveClass('step-type-controls');
+    fireEvent.click(configureButton);
+    expect(screen.getByRole('status')).toHaveClass('step-type-notice');
+    expect(api.setStep).not.toHaveBeenCalled();
+  });
+
+  it('两个步骤的候选保持隐藏边界及数值单位草稿，取消不提交，确认只原子替换一次', async () => {
+    const target = factoryTemplates.find(item => item.name === 'Structure Etch')!;
+    const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [step(0), step(1)], factoryTemplates})), setStep: vi.fn(async request => ({step: {...target, index: request.index}, statuses: ['dirty', 'ready'] as RuntimeStatus[], warnings: []}))});
+    const {container} = render(<AppStateProvider api={api}><SelectionControls /><SelectedPanel /></AppStateProvider>);
+    await screen.findByLabelText('工艺类型');
+    fireEvent.change(screen.getByLabelText('工艺类型'), {target: {value: 'Etch'}});
+    fireEvent.change(screen.getByLabelText('刻蚀深度（nm）'), {target: {value: '42'}});
+    fireEvent.change(screen.getByLabelText('刻蚀深度单位'), {target: {value: 'µm'}});
+    fireEvent.click(screen.getByRole('button', {name: 'select 1'}));
+    fireEvent.change(screen.getByLabelText('工艺类型'), {target: {value: 'Etch'}});
+    const panels = container.querySelectorAll<HTMLElement>('.step-type-candidate-panel');
+    expect(panels).toHaveLength(2);
+    expect(panels[0]).toHaveAttribute('hidden');
+    expect(panels[0]).not.toBeVisible();
+    expect(panels[1]).not.toHaveAttribute('hidden');
+    expect(panels[1]).toBeVisible();
+    expect(screen.queryByLabelText('沉积模式')).not.toBeInTheDocument();
+    expect(within(panels[1]).getByLabelText('刻蚀深度单位')).toHaveValue('µm');
+    fireEvent.change(within(panels[1]).getByLabelText('刻蚀深度（µm）'), {target: {value: '0.081'}});
+    fireEvent.click(screen.getByRole('button', {name: 'select 0'}));
+    expect(panels[0]).toBeVisible();
+    expect(panels[1]).toHaveAttribute('hidden');
+    expect(panels[1]).not.toBeVisible();
+    expect(within(panels[0]).getByLabelText('刻蚀深度单位')).toHaveValue('µm');
+    expect(within(panels[0]).getByLabelText('刻蚀深度（µm）')).toHaveValue('0.042');
+    fireEvent.click(within(panels[0]).getByRole('button', {name: '取消'}));
+    expect(api.setStep).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', {name: 'select 1'}));
+    const remaining = container.querySelector<HTMLElement>('.step-type-candidate-panel')!;
+    expect(within(remaining).getByLabelText('刻蚀深度（µm）')).toHaveValue('0.081');
+    fireEvent.click(within(remaining).getByRole('button', {name: '确认替换'}));
+    await waitFor(() => expect(api.setStep).toHaveBeenCalledTimes(1));
+    expect(api.setStep).toHaveBeenCalledWith(expect.objectContaining({index: 1, name: 'Structure Etch', params: {...target.params, depth_nm: 81}}), expect.any(AbortSignal));
+    expect(api.addStep).not.toHaveBeenCalled();
+    expect(api.removeStep).not.toHaveBeenCalled();
+  });
+
   it('同类型重新配置确认丢弃会重置参数和名称，拒绝丢弃保留草稿', async () => {
     const target = step(0, {name: 'Structure Etch', instanceName: 'Structure Etch', params: {depth_nm: 20}, parameterSpecs: [{key: 'depth_nm', label: 'Depth', type: 'float', minimum: 0, units: 'nm', dimension: 'length', canonicalUnit: 'nm', displayUnits: ['nm', 'µm']}]});
     const api = apiStub({init: vi.fn(async () => ({...initView(), recipe: [target], factoryTemplates: [target]})), setStep: vi.fn(async () => ({step: target, statuses: ['dirty'] as RuntimeStatus[], warnings: []}))});
@@ -402,6 +466,8 @@ describe('StepStructureBar', () => {
 
     fireEvent.change(typeSelect, {target: {value: 'Etch'}});
     expect(screen.getByText(warning)).toBeVisible();
+    expect(screen.getByText(legacy)).toHaveClass('step-type-help');
+    expect(screen.getByText(warning)).toHaveClass('step-type-warning');
     expect(screen.getByRole('button', {name: locale === 'EN' ? 'Configure type' : '配置类型'})).toBeDisabled();
     expect(screen.queryByText(/正在配置候选类型|Configuring a candidate/)).not.toBeInTheDocument();
     expect(api.setStep).not.toHaveBeenCalled();

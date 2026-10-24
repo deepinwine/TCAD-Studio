@@ -1379,6 +1379,28 @@ button:focus-visible,
 .add-step-dialog p, .add-step-dialog small { color: #a6b9cd; font-size: 12px; }
 .add-step-dialog input, .add-step-dialog select { padding: 8px; background: #0c1722; color: #e6eef5; border: 1px solid #41536a; border-radius: 4px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.step-type-editor { display: grid; gap: 10px; min-width: 0; margin-block: 12px; }
+.step-type-editor .step-type-controls,
+.step-type-editor .step-type-field,
+.step-type-editor .step-type-candidate-panel:not([hidden]),
+.step-type-editor .type-candidate form { display: grid; gap: 8px; min-width: 0; }
+.step-type-editor > [hidden] { display: none; }
+.step-type-editor .step-type-field label { color: #cbd8e5; font-size: 10px; }
+.step-type-editor select,
+.step-type-editor input:not([type='checkbox']):not([type='range']) { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 30px; padding: 6px 8px; color: #dce7f2; background: #0b121b; border: 1px solid #34485d; border-radius: 4px; }
+.step-type-editor button { min-height: 30px; max-width: 100%; padding: 6px 8px; color: #dce7f2; background: #172333; border: 1px solid #34485d; border-radius: 4px; white-space: normal; overflow-wrap: anywhere; }
+.step-type-editor .step-type-actions button { width: 100%; }
+.step-type-editor :is(select, input, button):focus-visible { outline: 2px solid #56b5ff; outline-offset: 1px; }
+.step-type-editor :is(select, input, button):disabled { cursor: not-allowed; opacity: .58; }
+.step-type-editor :is(p, h2, small, label) { min-width: 0; overflow-wrap: anywhere; }
+.step-type-editor :is(.step-type-help, .step-type-warning, .step-type-notice) { margin: 0; font-size: 11px; line-height: 1.45; }
+.step-type-editor :is(.step-type-help, .step-type-notice) { color: #a6b9cd; }
+.step-type-editor .step-type-warning { color: #f2a6ae; }
+.step-type-editor .type-candidate { min-width: 0; padding: 9px; border: 1px solid #263444; border-radius: 5px; background: #101925; }
+.step-type-editor .type-candidate h2 { margin: 0; font-size: 13px; }
+.step-type-editor .type-candidate form > p { margin: 0; color: #a6b9cd; font-size: 11px; line-height: 1.45; }
+.step-type-editor .type-candidate .dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.step-type-editor .type-candidate .dialog-actions button { flex: 1 1 100px; min-width: 0; }
 .studio-shell { grid-template-rows: auto auto minmax(0, 1fr) 92px; }
 .studio-toolbar { position: relative; gap: 12px; grid-row: 1; min-height: 56px; padding-block: 8px; }
 .global-error-strip { grid-row: 2; }

@@ -36,18 +36,24 @@ export function StepTypeEditor({step, onCandidateChange}: {step: StepView; onCan
     else {setCandidates(old => {const next = {...old}; delete next[step.index]; return next;}); actions.setTypeCandidate(step.index, false); onCandidateChange(step.index, false);}
   }
   return <div className="step-type-editor">
-    {!processCatalog.some(item => item.id === current) && <p>{t('typeEdit.legacy', {name: step.name})}</p>}
-    <label htmlFor="step-process-type">{t('typeEdit.type')}</label>
-    <select id="step-process-type" disabled={busy} value={choice} onChange={event => configure(event.target.value, 'Deposit')}>
-      <option value="" disabled>{t('structure.selectType')}</option>{processCatalog.map(item => <option key={item.id} value={item.id}>{t(item.key)}</option>)}
-    </select>
-    {choice === 'Deposit' && <><label htmlFor="step-deposition-mode">{t('typeEdit.mode')}</label><select id="step-deposition-mode" disabled={busy} value={mode} onChange={event => configure(choice, event.target.value)}><option value="Deposit">{t('typeEdit.film')}</option><option value="Fill">{t('typeEdit.fill')}</option></select></>}
-    <button type="button" disabled={busy || !available} onClick={() => configure(choice, mode)}>{t('typeEdit.configure')}</button>
-    {choice !== '' && !available && <p>{t('structure.legacyServer')}</p>}
+    {!processCatalog.some(item => item.id === current) && <p className="step-type-help">{t('typeEdit.legacy', {name: step.name})}</p>}
+    <div className="step-type-controls">
+      <div className="step-type-field">
+        <label htmlFor="step-process-type">{t('typeEdit.type')}</label>
+        <select id="step-process-type" disabled={busy} value={choice} onChange={event => configure(event.target.value, 'Deposit')}>
+          <option value="" disabled>{t('structure.selectType')}</option>{processCatalog.map(item => <option key={item.id} value={item.id}>{t(item.key)}</option>)}
+        </select>
+      </div>
+      {choice === 'Deposit' && <div className="step-type-field"><label htmlFor="step-deposition-mode">{t('typeEdit.mode')}</label><select id="step-deposition-mode" disabled={busy} value={mode} onChange={event => configure(choice, event.target.value)}><option value="Deposit">{t('typeEdit.film')}</option><option value="Fill">{t('typeEdit.fill')}</option></select></div>}
+      <div className="step-type-actions">
+        <button type="button" disabled={busy || !available} onClick={() => configure(choice, mode)}>{t('typeEdit.configure')}</button>
+      </div>
+    </div>
+    {choice !== '' && !available && <p className="step-type-warning">{t('structure.legacyServer')}</p>}
     {Object.entries(candidates).map(([indexText, candidate]) => {
       const index = Number(indexText);
-      return <div key={`${index}:${generations[index]}`} hidden={index !== step.index}>
-        <p role="status">{t('typeEdit.notice')}</p>
+      return <div className="step-type-candidate-panel" key={`${index}:${generations[index]}`} hidden={index !== step.index}>
+        <p role="status" className="step-type-notice">{t('typeEdit.notice')}</p>
         <AddStepDialog inline template={candidate} busy={busy} onCancel={() => cancel(index)} onConfirm={async configuration => {const applied = await actions.replaceStep(index, candidate.name, configuration); if (applied) cancel(index); return applied;}} />
       </div>;
     })}
