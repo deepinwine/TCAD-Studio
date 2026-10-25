@@ -446,7 +446,7 @@ describe('ParameterPanel', () => {
 
     expect(api.setStep).not.toHaveBeenCalled();
     expect(input).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByText('必须小于或等于 500')).toBeInTheDocument();
+    expect(screen.getByText('必须小于或等于 500 mJ/cm²')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', {name: '开始运行'}));
     expect(screen.getByText('请先修正无效参数，再运行工艺。')).toBeVisible();
     expect(api.runAll).not.toHaveBeenCalled();
@@ -738,4 +738,29 @@ it('initializer is edited through project settings and never ordinary process co
   fireEvent.click(screen.getByRole('button', {name: '选择步骤 0'}));
   expect(screen.queryByLabelText('厚度')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', {name: '应用并构建到此步'})).not.toBeInTheDocument();
+});
+
+it('普通参数区随单位与语言更新错误边界，非法值不保存，修正后 blur 保存一次', async () => {
+  const initial = init([step(0, {params: {value: 100}, parameterSpecs: [{key: 'value', label: 'Value', type: 'float', minimum: 0, maximum: 1000, units: 'nm', dimension: 'length', canonicalUnit: 'nm', displayUnits: ['nm', 'µm']}]})]);
+  const api = apiStub(initial);
+  function Switch() {const {setLocale} = useI18n(); return <button onClick={() => setLocale('en')}>English</button>;}
+  render(<I18nProvider><AppStateProvider api={api}><Switch /><Harness /></AppStateProvider></I18nProvider>);
+  const input = await screen.findByLabelText('Value');
+  fireEvent.change(input, {target: {value: '-1'}});
+  fireEvent.blur(input);
+  expect(screen.getByText('必须大于或等于 0 nm')).toBeVisible();
+  expect(api.setStep).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Value 单位'), {target: {value: 'µm'}});
+  fireEvent.change(input, {target: {value: '1.00001'}});
+  expect(screen.getByText('必须小于或等于 1 µm')).toBeVisible();
+  fireEvent.click(screen.getByText('English'));
+  expect(screen.getByText('Must be less than or equal to 1 µm')).toBeVisible();
+  expect(input).toHaveValue('1.00001');
+  fireEvent.blur(input);
+  expect(api.setStep).not.toHaveBeenCalled();
+  fireEvent.change(input, {target: {value: '0.5'}});
+  fireEvent.blur(input);
+  await waitFor(() => expect(api.setStep).toHaveBeenCalledTimes(1));
+  expect(api.setStep).toHaveBeenCalledWith({index: 0, params: {value: 500}}, expect.any(AbortSignal));
+  expect(screen.queryByText('Must be less than or equal to 1 µm')).not.toBeInTheDocument();
 });

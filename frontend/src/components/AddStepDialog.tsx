@@ -8,6 +8,7 @@ import {conversionSpec} from '../units/parameterUnits';
 import {fromCanonical, toCanonical, UnitConversionError, type DisplayUnit} from '../units/units';
 import {parameterIsActive} from './parameterActivity';
 import {parameterChoiceLabel} from './parameterCopy';
+import {parameterValidationMessage} from './parameterValidationMessage';
 
 function displayBound(value: number | undefined, conversion: ReturnType<typeof conversionSpec>, unit: DisplayUnit): number | undefined {
   if (value === undefined || !conversion) return value;
@@ -86,12 +87,14 @@ export function AddStepDialog({template, busy, onCancel, onConfirm, inline = fal
       {failed && <p role="alert">{t(inline ? 'typeEdit.failed' : 'addStep.failed')}</p>}
       {validated.filter(item => item.active).map(({spec, result, baseResult, conversion, editable}) => {
         const id = `${instanceId}-${spec.key}`;
+        const validationId = `${id}-validation`;
+        const accessibility = {'aria-invalid': !result.ok, 'aria-describedby': !result.ok ? validationId : undefined};
         const label = Object.hasOwn(zhCN, `cad.${spec.key}`) ? t(`cad.${spec.key}` as TranslationKey) : spec.label;
         return <div className="parameter-field" key={spec.key}>
           <label htmlFor={id}>{spec.units ? t('addStep.fieldWithUnit', {label, unit: units[spec.key] ?? spec.units}) : label}</label>
-          {!editable ? <pre>{JSON.stringify(values[spec.key])}</pre> : spec.choices ? <select id={id} disabled={disabled} value={spec.choices.findIndex(([value]) => Object.is(value, values[spec.key]))} onChange={event => updateValue(spec.key, spec.choices![Number(event.target.value)][0])}>
+          {!editable ? <pre>{JSON.stringify(values[spec.key])}</pre> : spec.choices ? <select id={id} {...accessibility} disabled={disabled} value={spec.choices.findIndex(([value]) => Object.is(value, values[spec.key]))} onChange={event => updateValue(spec.key, spec.choices![Number(event.target.value)][0])}>
             {spec.choices.map(([value, text], index) => <option key={index} value={index}>{parameterChoiceLabel(spec.key, value, text, t)}</option>)}
-          </select> : spec.type === 'bool' || spec.type === 'boolean' ? <input id={id} type="checkbox" disabled={disabled} checked={Boolean(values[spec.key])} onChange={event => updateValue(spec.key, event.target.checked)} /> : <input id={id} type={!conditional && ['float', 'int', 'integer'].includes(spec.type) ? 'number' : 'text'} inputMode={['float', 'int', 'integer'].includes(spec.type) ? 'decimal' : undefined} step="any" min={displayBound(spec.minimum, conversion, units[spec.key])} max={displayBound(spec.maximum, conversion, units[spec.key])} disabled={disabled} aria-invalid={!result.ok} value={String(values[spec.key] ?? '')} onChange={event => updateValue(spec.key, event.target.value)} />}
+          </select> : spec.type === 'bool' || spec.type === 'boolean' ? <input id={id} {...accessibility} type="checkbox" disabled={disabled} checked={Boolean(values[spec.key])} onChange={event => updateValue(spec.key, event.target.checked)} /> : <input id={id} type={!conditional && ['float', 'int', 'integer'].includes(spec.type) ? 'number' : 'text'} inputMode={['float', 'int', 'integer'].includes(spec.type) ? 'decimal' : undefined} step="any" min={displayBound(spec.minimum, conversion, units[spec.key])} max={displayBound(spec.maximum, conversion, units[spec.key])} disabled={disabled} {...accessibility} value={String(values[spec.key] ?? '')} onChange={event => updateValue(spec.key, event.target.value)} />}
           {conversion && <select aria-label={t('addStep.unit', {label})} disabled={disabled} value={units[spec.key]} onChange={event => {
             const nextUnit = event.target.value as DisplayUnit;
             try {
@@ -107,8 +110,8 @@ export function AddStepDialog({template, busy, onCancel, onConfirm, inline = fal
             }
           }}>{conversion.units.map(unit => <option key={unit} value={unit}>{unit}</option>)}</select>}
           {spec.tooltip && <small>{spec.tooltip}</small>}
-          {spec.key === 'directionality_percent' && <><input type="range" aria-label={label} min="0" max="100" step="any" value={Number.isFinite(Number(values[spec.key])) ? Number(values[spec.key]) : 0} disabled={disabled} onChange={event => updateValue(spec.key, event.target.value)} /><small>{t('cad.directionalityEndpoints')}</small></>}
-          {!result.ok && <small role="alert">{t('addStep.invalid')}</small>}
+          {spec.key === 'directionality_percent' && <><input type="range" {...accessibility} aria-label={label} min="0" max="100" step="any" value={Number.isFinite(Number(values[spec.key])) ? Number(values[spec.key]) : 0} disabled={disabled} onChange={event => updateValue(spec.key, event.target.value)} /><small>{t('cad.directionalityEndpoints')}</small></>}
+          {!result.ok && <small id={validationId} role="alert">{parameterValidationMessage(result.messageKey, spec, t, units[spec.key])}</small>}
         </div>;
       })}
       {!project && <><label htmlFor={nameId}>{t('addStep.customName')}</label>

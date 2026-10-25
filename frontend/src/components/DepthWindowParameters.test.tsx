@@ -241,3 +241,25 @@ it('hides downstream results after a failed input-prefix step', async () => {
   expect(await screen.findByText('未解析（需以当前输入成功构建）')).toBeVisible();
   expect(screen.queryByText('395 nm')).not.toBeInTheDocument();
 });
+
+it('候选错误隐藏后移除提示，语言切换与重新激活保留草稿、单位和名称', () => {
+  function Switch() {const {setLocale} = useI18n(); return <button onClick={() => setLocale('en')}>English</button>;}
+  const confirm = vi.fn(async () => {});
+  render(<I18nProvider><Switch /><AddStepDialog template={etch({etch_mode: 'Depth window'})} busy={false} inline onConfirm={confirm} onCancel={() => {}} /></I18nProvider>);
+  fireEvent.change(screen.getByLabelText('自定义名称（可选）'), {target: {value: 'Window draft'}});
+  fireEvent.change(screen.getByLabelText('起始深度（孔口向下）单位'), {target: {value: 'µm'}});
+  fireEvent.change(screen.getByLabelText('起始深度（孔口向下）（µm）'), {target: {value: 'bad.raw'}});
+  expect(screen.getByRole('alert')).toHaveTextContent('请输入有限数值');
+  fireEvent.change(screen.getByLabelText('深度参考'), {target: {value: '1'}});
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', {name: '确认替换'})).toBeEnabled();
+  fireEvent.click(screen.getByText('English'));
+  fireEvent.change(screen.getByLabelText('Depth reference'), {target: {value: '0'}});
+  const input = screen.getByLabelText('Start depth (below opening) (µm)');
+  expect(input).toHaveValue('bad.raw');
+  expect(screen.getByRole('alert')).toHaveTextContent('Enter a finite number');
+  expect(input).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
+  expect(screen.getByLabelText('Custom name (optional)')).toHaveValue('Window draft');
+  expect(screen.getByRole('button', {name: 'Replace step'})).toBeDisabled();
+  expect(confirm).not.toHaveBeenCalled();
+});

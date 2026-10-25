@@ -128,6 +128,13 @@ describe('配置结构步骤', () => {
     fireEvent.click(screen.getByRole('button', {name: '取消'}));
     expect(api.addStep).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', {name: '添加步骤'}));
+    fireEvent.change(screen.getByLabelText('厚度（nm）'), {target: {value: '-1'}});
+    const invalid = screen.getByLabelText('厚度（nm）');
+    expect(screen.getByRole('alert')).toHaveTextContent('必须大于或等于 0 nm');
+    expect(invalid).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
+    expect(screen.getByRole('button', {name: '确认添加'})).toBeDisabled();
+    fireEvent.submit(invalid.closest('form')!);
+    expect(api.addStep).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('厚度（nm）'), {target: {value: '80'}});
     fireEvent.change(screen.getByLabelText('厚度单位'), {target: {value: 'µm'}});
     expect(screen.getByLabelText('厚度（µm）')).toHaveValue(0.08);
@@ -236,6 +243,8 @@ describe('StepStructureBar', () => {
     expect(screen.getByLabelText('自定义名称（可选）')).toHaveValue('draft name');
     fireEvent.change(screen.getByLabelText('刻蚀深度单位'), {target: {value: 'µm'}});
     fireEvent.change(screen.getByLabelText('刻蚀深度（µm）'), {target: {value: '-1'}});
+    expect(screen.getByRole('alert')).toHaveTextContent('必须大于或等于 0 µm');
+    expect(api.setStep).not.toHaveBeenCalled();
     expect(screen.getByRole('button', {name: '确认替换'})).toBeDisabled();
     confirm.mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', {name: '配置类型'}));
@@ -321,6 +330,13 @@ describe('StepStructureBar', () => {
     await screen.findByLabelText('网格 X');
     fireEvent.change(screen.getByLabelText('网格 X'), {target: {value: '64'}});
     fireEvent.change(screen.getByLabelText('体素尺寸（nm）'), {target: {value: '10'}});
+    const invalid = screen.getByLabelText('厚度（nm）');
+    fireEvent.change(invalid, {target: {value: '-1'}});
+    expect(screen.getByRole('alert')).toHaveTextContent('必须大于或等于 0 nm');
+    expect(invalid).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
+    expect(screen.getByRole('button', {name: '确认项目设置'})).toBeDisabled();
+    fireEvent.submit(invalid.closest('form')!);
+    expect(api.importRecipe).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText('厚度（nm）'), {target: {value: '300'}});
     fireEvent.click(screen.getByRole('button', {name: '确认项目设置'}));
     await waitFor(() => expect(api.importRecipe).toHaveBeenCalledTimes(1));

@@ -11,6 +11,7 @@ import {presentStep} from './stepPresentation';
 import {ErrorNotice} from './ErrorNotice';
 import {StatusBadge} from './StatusBadge';
 import {validateParameter} from './parameterValidation';
+import {parameterValidationMessage} from './parameterValidationMessage';
 import {toCanonical, fromCanonical, formatDisplayValue, type DisplayUnit} from '../units/units';
 import {conversionSpec} from '../units/parameterUnits';
 import {StepTypeEditor} from './StepTypeEditor';
@@ -128,29 +129,6 @@ function parameterDescription(spec: ParameterSpecView, tooltip: string | undefin
   if (spec.step !== undefined) parts.push(t('parameter.step', {step: spec.step}));
   if (spec.decimals !== undefined) parts.push(t('parameter.decimals', {decimals: spec.decimals}));
   return parts.join(t('common.listSeparator'));
-}
-
-function validationMessage(
-  messageKey: string | undefined,
-  spec: ParameterSpecView,
-  t: Translate,
-): string {
-  switch (messageKey) {
-    case 'validation.finite':
-    case 'validation.positive':
-    case 'validation.integer':
-    case 'validation.safeInteger':
-    case 'validation.boolean':
-    case 'validation.choice':
-    case 'validation.unsupported':
-      return t(messageKey);
-    case 'validation.minimum':
-      return t(messageKey, {minimum: spec.minimum ?? ''});
-    case 'validation.maximum':
-      return t(messageKey, {maximum: spec.maximum ?? ''});
-    default:
-      return t('parameter.invalid');
-  }
 }
 
 function ParameterControl({
@@ -305,9 +283,9 @@ function ParameterField({
   const description = parameterDescription(spec, tooltip, t);
   const initialValidation = validateParameter(spec, initialValue);
   const clientError = draft?.validation.status === 'invalid'
-    ? validationMessage(draft.validation.message, spec, t)
+    ? parameterValidationMessage(draft.validation.message, spec, t, displayUnit)
     : draft === undefined && spec.activeWhen !== undefined && !initialValidation.ok
-      ? validationMessage(initialValidation.messageKey, spec, t) : undefined;
+      ? parameterValidationMessage(initialValidation.messageKey, spec, t, displayUnit) : undefined;
   const hasError = clientError !== undefined || serverErrorId !== undefined;
   const describedBy = [
     unitsId,
