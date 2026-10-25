@@ -816,3 +816,22 @@ export function parseDisplaySliceEnvelope(payload: unknown): import('./types').D
   for(let i=0;i<count;i++) owners[i]=(raw.charCodeAt(i*4) | raw.charCodeAt(i*4+1)<<8 | raw.charCodeAt(i*4+2)<<16 | raw.charCodeAt(i*4+3)<<24) >>> 0;
   return {...slice,owners,revision:requireInteger(result.revision,'result.revision',0)};
 }
+
+/** Download paths are constructed only from server-generated ASCII ZIP basenames. */
+export function requireStructureZipFile(value: unknown): string {
+  if (typeof value !== 'string' || value.length > 200
+    || !/^[A-Za-z0-9][A-Za-z0-9_.-]*\.zip$/.test(value)) {
+    throw new ApiContractError('result.zip_file', 'safe non-empty ZIP basename');
+  }
+  return value;
+}
+
+export function parseStructureExportEnvelope(payload: unknown): import('./types').StructureExportView {
+  const result = requireOkResult(payload);
+  const zipFile = requireStructureZipFile(result.zip_file);
+  const files = parseStringArray(result.files, 'result.files');
+  if (!files.some(file => /(?:^|[/\\])[^/\\\x00-\x1f]+\.stl$/i.test(file))) {
+    throw new ApiContractError('result.files', 'at least one non-empty STL file');
+  }
+  return {zipFile, files};
+}

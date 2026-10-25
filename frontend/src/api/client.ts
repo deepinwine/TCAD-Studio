@@ -1,4 +1,6 @@
 import {
+  parseStructureExportEnvelope,
+  requireStructureZipFile,
   parseDisplayManifestEnvelope,
   parseDisplaySliceEnvelope,
   ApiContractError,
@@ -353,6 +355,22 @@ function previewStlPath(request: PreviewStlRequest): string {
 
 export function createTcadApi(): TcadApi {
   return {
+    prepareStructureExport(signal) {
+      return apiPostJson('/api/export', {
+        sti: true, cross: false, metrics: false,
+        merge_same_materials: true, include_agent_report: false,
+      }, parseStructureExportEnvelope, signal);
+    },
+    async downloadStructureExport(zipFile, signal) {
+      const name = requireStructureZipFile(zipFile);
+      const buffer = await apiBinary(`/api/export/download?file=${encodeURIComponent(name)}`, signal);
+      const signature = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+      if (signature.length < 4 || signature[0] !== 80 || signature[1] !== 75
+        || signature[2] !== 3 || signature[3] !== 4) {
+        throw new TcadApiError('Invalid structure ZIP', {status: 200, code: 'invalid_structure_zip'});
+      }
+      return new Blob([buffer], {type: 'application/zip'});
+    },
     async getMaterialSlice(request, signal) {
       if (!['x', 'y', 'z'].includes(request.axis)) throw new ApiContractError('request.axis', 'x, y, z');
       const index = requireRequestInteger(request.index, 'request.index', 0);

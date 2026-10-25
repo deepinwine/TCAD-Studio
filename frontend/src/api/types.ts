@@ -251,7 +251,14 @@ export interface MaskAssetApplyView {
   warnings: string[];
 }
 
+export interface StructureExportView {
+  zipFile: string;
+  files: string[];
+}
+
 export interface TcadApi {
+  prepareStructureExport?(signal?: AbortSignal): Promise<StructureExportView>;
+  downloadStructureExport?(zipFile: string, signal?: AbortSignal): Promise<Blob>;
   getDisplayManifest?(signal?: AbortSignal): Promise<DisplayManifestView>;
   getDisplayMesh?(request: DisplayMeshRequest, signal?: AbortSignal): Promise<ArrayBuffer>;
   getDisplaySlice?(request: DisplaySliceRequest, signal?: AbortSignal): Promise<DisplaySliceView>;
