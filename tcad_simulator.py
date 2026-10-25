@@ -62508,6 +62508,9 @@ def _webui_worker_main(
         return out, removed
 
     def _export_zip(options: Dict[str, Any]) -> Dict[str, Any]:
+        include_agent_report = options.get("include_agent_report", True)
+        if not isinstance(include_agent_report, bool):
+            raise ValueError("include_agent_report must be a boolean")
         opts = {
             "sti": bool(options.get("sti", True)),
             "cross": bool(options.get("cross", False)),
@@ -62533,7 +62536,7 @@ def _webui_worker_main(
             exported.extend(model.export_chart_data(export_dir, timestamp))
         # AI Agent report (if available in ui_state): export a compact markdown "why/expect/actual" log.
         try:
-            astate = current_ui_state.get("agent") if isinstance(current_ui_state, dict) else None
+            astate = current_ui_state.get("agent") if include_agent_report and isinstance(current_ui_state, dict) else None
             if isinstance(astate, dict) and (astate.get("conversation") or astate.get("step_meta") or astate.get("run_reports")):
                 lines: List[str] = []
                 lines.append("# TCAD AI Agent Report\n")

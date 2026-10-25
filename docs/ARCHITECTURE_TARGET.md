@@ -136,8 +136,16 @@ the frozen-core tests when changing those fields.
 | `/api/history/load` | POST | `{id, current_name?}` | JSON |
 | `/api/ui_state` | POST | `{recipe_id, ui_state}` | JSON |
 | `/api/save` | POST | `{}` | JSON |
-| `/api/export` | POST | 导出选项 JSON | JSON |
+| `/api/export` | POST | 导出选项 JSON：`sti?`、`cross?`、`metrics?`、`merge_same_materials?`；可选布尔 `include_agent_report` 缺省 `true`，`false` 只跳过 `agent_report.md`，非布尔拒绝且不写文件 | JSON；`result.zip_file` 为 ZIP 基名、`files` 为文件清单；当前完整模型导出不运行 Recipe |
 | `/api/export/download` | GET | query `file` | **binary** attachment |
+
+结构导出加法契约由 `tests/test_structure_export_http.py::StructureExportHTTPTests` 覆盖：
+`test_complete_material_zip_excludes_agent_report_and_preserves_current_model` 检查报告关闭、
+全部材料拆分/合并 STL、材料清单、有限非空 µm 顶点与模型/历史/revision 不变；
+`test_omitted_report_option_preserves_legacy_agent_report` 验证缺省旧行为；
+`test_empty_geometry_does_not_claim_stl_and_missing_download_is_json_error` 验证空模型与下载错误。
+React 固定 `sti=true,cross=false,metrics=false,merge_same_materials=true,include_agent_report=false`，
+眼睛、透明度、相机与剖切只影响视图。STL 沿用现有网格质量策略，不表示 BRep。
 
 加法参数契约（ADR-025）：元数据声明的 canonical 单位为 length=nm、time=s、angle=degree、rate=nm/s；
 `display_units` 是显示单位列表，`capability_key` 对应 `backend_capabilities` 的字段。
