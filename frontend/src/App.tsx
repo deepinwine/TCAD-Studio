@@ -146,7 +146,7 @@ function StudioShell({api, viewerRuntimeFactory}: {api: TcadApi; viewerRuntimeFa
         viewer={<ThreeViewer api={api} model={state.model} refreshToken={state.previewGeneration} runtimeFactory={viewerRuntimeFactory} hiddenStepIds={state.hiddenStepIds} onDisplayReady={actions.setDisplayReady} />} />
       <TimelineBar />
     </main>
-    {workbench !== null && <MaskWorkbench api={api} initialAsset={workbench.asset} stepIndex={workbench.stepIndex} onWriteStart={() => actions.invalidateExecutionResults(workbench.stepIndex)} onApply={actions.applyMaskAsset} onError={actions.reportMaskError} onClose={() => setWorkbench(null)} />}</>
+    {workbench !== null && <MaskWorkbench api={api} initialAsset={workbench.asset} stepIndex={workbench.stepIndex} onWriteStart={() => actions.beginMaskWrite(workbench.stepIndex)} onWriteEnd={actions.endMaskWrite} onApply={actions.applyMaskAsset} onError={actions.reportMaskError} onClose={() => setWorkbench(null)} />}</>
   );
 }
 

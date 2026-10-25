@@ -24,7 +24,8 @@ export interface MaskWorkbenchProps {
   onApply(payload: MaskAssetApplyView): void;
   onClose(): void;
   onError?(error: unknown): void;
-  onWriteStart?(): void;
+  onWriteStart?(): boolean | void;
+  onWriteEnd?(): void;
 }
 function NumericField({
   label,
@@ -88,6 +89,7 @@ export function MaskWorkbench({
   onClose,
   onError,
   onWriteStart,
+  onWriteEnd,
 }: MaskWorkbenchProps) {
   const [state, dispatch] = useReducer(maskEditorReducer, initialAsset, createMaskEditorState);
   const {t} = useI18n();
@@ -188,17 +190,20 @@ export function MaskWorkbench({
       if (mounted.current) setBusy(false);
     }
   }
+  const writeRequest = (operation: (signal: AbortSignal) => Promise<void>) =>
+    request(async signal => {
+      if (onWriteStart?.() === false) return;
+      try {await operation(signal);} finally {onWriteEnd?.();}
+    });
   const save = () =>
-    request(async (signal) => {
-      onWriteStart?.();
+    writeRequest(async (signal) => {
       const payload = await api.saveAndApplyMaskAsset({asset: state.asset, stepIndex}, signal);
       if (signal.aborted || !mounted.current) return;
       onApply(payload);
       onClose();
     });
   const importFile = (file: File) =>
-    request(async (signal) => {
-      onWriteStart?.();
+    writeRequest(async (signal) => {
       const payload = await api.importAndApplyMaskAsset(file, stepIndex, signal);
       if (signal.aborted || !mounted.current) return;
       onApply(payload);

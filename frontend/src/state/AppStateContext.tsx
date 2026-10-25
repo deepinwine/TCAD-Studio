@@ -10,6 +10,8 @@ import {
   useRef,
 } from 'react';
 import {TcadApiError} from '../api/client';
+import {sameStructureExportSource, structureExportSource, structureExportBlock, structureExportNeedsAcknowledgement, type StructureExportConfirmation, type StructureExportProgress} from '../components/structureExportState';
+import {parseStructureExportEnvelope} from '../api/schemas';
 import {isInitializer} from '../components/processCatalog';
 import {draftIsActive, parameterIsActive, parameterValues} from '../components/parameterActivity';
 import {validateParameter} from '../components/parameterValidation';
@@ -29,6 +31,8 @@ import {
 
 export interface AppStateActions {
   invalidateExecutionResults(index?: number): void;
+  beginMaskWrite(index: number): boolean;
+  endMaskWrite(): void;
   toggleStepVisibility(stepId: string): void;
   setDisplayReady(manifest: import('../api/types').DisplayManifestView | null, ready: boolean, failed?: boolean): void;
   setTypeCandidate(index: number, pending: boolean): void;
@@ -57,6 +61,7 @@ export interface AppStateActions {
   newRecipe(name: string): Promise<void>;
   saveRecipe(name: string): Promise<void>;
   exportRecipe(): Promise<void>;
+  exportStructure(confirmation: StructureExportConfirmation, progress?: (phase: StructureExportProgress) => void): Promise<{ok: boolean; error?: TcadApiError}>;
   addStep(name: string, configuration?: {params: Record<string, unknown>; instanceName?: string}): Promise<boolean>;
   replaceStep(index: number, name: string, configuration: {params: Record<string, unknown>; instanceName?: string}): Promise<boolean>;
   removeStep(): Promise<void>;
@@ -357,6 +362,12 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     mutationGateRef.current = null;
     dispatch({type: 'mutation/finished'});
   }, [dispatch]);
+
+  const beginMaskWrite = useCallback((index: number): boolean => {
+    if (stateRef.current.phase !== 'ready') return false;
+    return beginMutation('mask', index, true);
+  }, [beginMutation]);
+  const endMaskWrite = useCallback(() => finishMutation('mask'), [finishMutation]);
 
   const runMutation = useCallback(async (
     operation: 'step' | 'to' | 'all',
@@ -768,6 +779,57 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     }
   }, [api, beginMutation, createController, dispatch, finishMutation, releaseController]);
 
+  const exportStructure = useCallback(async (
+    confirmation: StructureExportConfirmation,
+    progress?: (phase: StructureExportProgress) => void,
+  ): Promise<{ok: boolean; error?: TcadApiError}> => {
+    const current = stateRef.current;
+    const blocked = structureExportBlock(current, Boolean(api.prepareStructureExport && api.downloadStructureExport));
+    if (!mountedRef.current || blocked !== null || applyingRef.current || mutationGateRef.current !== null
+      || pendingSaveCountRef.current > 0 || candidateIndicesRef.current.size > 0 || invalidActiveConfiguration(current)
+      || !sameStructureExportSource(confirmation.source, structureExportSource(current))
+      || (structureExportNeedsAcknowledgement(current) && !confirmation.acknowledged)) {
+      return {ok: false, error: new TcadApiError('Structure export unavailable', {status: 0, code: 'structure_export_blocked'})};
+    }
+    cancelStandaloneTimeline();
+    mutationGateRef.current = 'export';
+    dispatch({type: 'export/started'});
+    const controller = createController();
+    let url: string | undefined;
+    let anchor: HTMLAnchorElement | undefined;
+    try {
+      progress?.('packing');
+      const result = await api.prepareStructureExport!(controller.signal);
+      if (!mountedRef.current || controller.signal.aborted) return {ok: false};
+      // Also validate optional injected APIs before constructing any URL or reporting success.
+      const prepared = parseStructureExportEnvelope({ok: true, result: {zip_file: result.zipFile, files: result.files}});
+      progress?.('downloading');
+      const blob = await api.downloadStructureExport!(prepared.zipFile, controller.signal);
+      if (!mountedRef.current || controller.signal.aborted) return {ok: false};
+      if (!(blob instanceof Blob) || blob.size === 0 || /json|text\/|html/i.test(blob.type)) {
+        throw new TcadApiError('Invalid structure ZIP', {status: 0, code: 'invalid_structure_zip'});
+      }
+      url = URL.createObjectURL(blob);
+      anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = prepared.zipFile;
+      document.body.append(anchor);
+      anchor.click();
+      return {ok: true};
+    } catch (error) {
+      if (!mountedRef.current || isAbortError(error, controller.signal)) return {ok: false};
+      return {ok: false, error: normalizeError(error)};
+    } finally {
+      anchor?.remove();
+      if (url !== undefined) URL.revokeObjectURL(url);
+      releaseController(controller);
+      if (mutationGateRef.current === 'export') {
+        mutationGateRef.current = null;
+        dispatch({type: 'mutation/finished'});
+      }
+    }
+  }, [api, cancelStandaloneTimeline, createController, dispatch, releaseController]);
+
   const exportRecipeAction = useCallback(async (): Promise<void> => {
     const controller = createController();
     try {
@@ -884,11 +946,13 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [bootstrap]);
 
   const actions = useMemo<AppStateActions>(() => ({
-    invalidateExecutionResults: index => dispatch({type: 'execution/resultsInvalidated', index}),
+    invalidateExecutionResults: index => {if (mutationGateRef.current !== 'export') dispatch({type: 'execution/resultsInvalidated', index});},
+    beginMaskWrite,
+    endMaskWrite,
     toggleStepVisibility: stepId => dispatch({type: 'display/toggled', stepId}),
     setDisplayReady: (manifest, ready, failed) => dispatch({type: 'display/loaded', manifest, ready, failed}),
-    applyMaskAsset: payload => dispatch({type: 'mask/assetApplied', payload}),
-    reportMaskError: error => dispatch({type: 'mutation/blocked', error: normalizeError(error)}),
+    applyMaskAsset: payload => {if (mutationGateRef.current !== 'export') dispatch({type: 'mask/assetApplied', payload});},
+    reportMaskError: error => {if (mutationGateRef.current !== 'export') dispatch({type: 'mutation/blocked', error: normalizeError(error)});},
     updateDraftDisplay,
     bootstrap,
     selectStep,
@@ -907,6 +971,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     newRecipe: newRecipeAction,
     saveRecipe: saveRecipeAction,
     exportRecipe: exportRecipeAction,
+    exportStructure,
     addStep: addStepAction,
     setTypeCandidate,
     replaceStep,
@@ -917,12 +982,15 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     uploadMask: uploadMaskAction,
   }), [
     dispatch,
+    beginMaskWrite,
+    endMaskWrite,
     addStepAction,
     setTypeCandidate,
     replaceStep,
     bootstrap,
     duplicateStepAction,
     exportRecipeAction,
+    exportStructure,
     importRecipe,
     loadTimeline,
     moveStepAction,

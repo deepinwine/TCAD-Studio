@@ -37,3 +37,24 @@ it('a write rejected by the busy request gate never issues another invalidation'
   fireEvent.click(save); fireEvent.click(save);
   expect(onWriteStart).toHaveBeenCalledTimes(1); expect(api.saveAndApplyMaskAsset).toHaveBeenCalledTimes(1);
 });
+
+it.each(['save', 'import'] as const)('%s rejected by shared model gate does not write, invalidate or release another operation', async operation => {
+  const onWriteStart = vi.fn(() => false); const onWriteEnd = vi.fn();
+  const write = vi.fn(async () => {throw network;});
+  const api = {saveAndApplyMaskAsset: write, importAndApplyMaskAsset: write} as unknown as TcadApi;
+  render(<MaskWorkbench api={api} initialAsset={asset} stepIndex={0} onApply={() => {}} onClose={() => {}} onWriteStart={onWriteStart} {...{onWriteEnd}} />);
+  if (operation === 'save') fireEvent.click(screen.getByRole('button', {name: '保存并应用'}));
+  else fireEvent.change(screen.getByLabelText('导入并应用文件'), {target: {files: [new File(['{}'], 'opening.json')]}});
+  await waitFor(() => expect(onWriteStart).toHaveBeenCalledTimes(1));
+  expect(write).not.toHaveBeenCalled(); expect(onWriteEnd).not.toHaveBeenCalled();
+});
+
+it.each(['save', 'import'] as const)('%s releases the acquired shared gate after failure', async operation => {
+  const onWriteStart = vi.fn(() => true); const onWriteEnd = vi.fn();
+  const write = vi.fn(async () => {throw network;});
+  const api = {saveAndApplyMaskAsset: write, importAndApplyMaskAsset: write} as unknown as TcadApi;
+  render(<MaskWorkbench api={api} initialAsset={asset} stepIndex={0} onApply={() => {}} onClose={() => {}} onWriteStart={onWriteStart} {...{onWriteEnd}} />);
+  if (operation === 'save') fireEvent.click(screen.getByRole('button', {name: '保存并应用'}));
+  else fireEvent.change(screen.getByLabelText('导入并应用文件'), {target: {files: [new File(['{}'], 'opening.json')]}});
+  await waitFor(() => expect(onWriteEnd).toHaveBeenCalledTimes(1)); expect(write).toHaveBeenCalledTimes(1);
+});

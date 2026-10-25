@@ -638,3 +638,38 @@ describe('Toolbar 执行操作', () => {
     expect(runAll).toBeEnabled();
   });
 });
+
+it('offers a distinct current structure export entry without exporting on open', async () => {
+  const api = apiStub({prepareStructureExport: vi.fn(async () => ({zipFile: 'safe.zip', files: ['Si.stl']})), downloadStructureExport: vi.fn(async () => new Blob(['PK']))});
+  render(<App api={api} viewerRuntimeFactory={stubViewerRuntime} />);
+  const button = await screen.findByRole('button', {name: '导出结构'});
+  fireEvent.click(button);
+  expect(screen.getByRole('dialog', {name: '导出结构'})).toBeInTheDocument();
+  expect(api.prepareStructureExport).not.toHaveBeenCalled();
+});
+
+it('keeps Viewer mounted and the model source unchanged while structure ZIP is packed and downloaded', async () => {
+  const packing = deferred<{zipFile: string; files: string[]}>();
+  const downloading = deferred<Blob>();
+  const mount = vi.fn(); const dispose = vi.fn(); const loadMeshes = vi.fn(async () => ({warnings: [], materials: []}));
+  const api = apiStub({prepareStructureExport: vi.fn(() => packing.promise), downloadStructureExport: vi.fn(() => downloading.promise)});
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:structure-export');
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+  const view = render(<App api={api} viewerRuntimeFactory={() => ({...stubViewerRuntime(), mount, dispose, loadMeshes})} />);
+  const entry = await screen.findByRole('button', {name: '导出结构'}); fireEvent.click(entry);
+  const dialog = screen.getByRole('dialog', {name: '导出结构'});
+  const checkbox = dialog.querySelector('input[type="checkbox"]')!; fireEvent.click(checkbox);
+  const button = screen.getByRole('button', {name: '导出当前结构'}); fireEvent.click(button);
+  const initialLoads = loadMeshes.mock.calls.length;
+  const initialManifestCalls = vi.mocked(api.getPreviewManifest).mock.calls.length;
+  expect(mount).toHaveBeenCalledTimes(1); expect(dispose).not.toHaveBeenCalled();
+  await act(async () => {packing.resolve({zipFile: 'model.zip', files: ['Si.stl']}); await packing.promise;});
+  expect(mount).toHaveBeenCalledTimes(1); expect(loadMeshes).toHaveBeenCalledTimes(initialLoads);
+  await act(async () => {downloading.resolve(new Blob(['PKzip'])); await downloading.promise;});
+  expect(await screen.findByText('ZIP 下载已触发。')).toBeInTheDocument();
+  expect(mount).toHaveBeenCalledTimes(1); expect(dispose).not.toHaveBeenCalled(); expect(loadMeshes).toHaveBeenCalledTimes(initialLoads);
+  expect(api.runAll).not.toHaveBeenCalled(); expect(api.runStep).not.toHaveBeenCalled(); expect(api.setStep).not.toHaveBeenCalled();
+  expect(api.getPreviewManifest).toHaveBeenCalledTimes(initialManifestCalls);
+  view.unmount(); vi.restoreAllMocks();
+});

@@ -18,7 +18,7 @@ import type {
 
 export type AppPhase = 'booting' | 'ready' | 'running' | 'fatal';
 export type ActiveMutation =
-  | 'step' | 'to' | 'all' | 'timeline' | 'undo' | 'redo' | 'recipe' | 'mask' | 'apply' | null;
+  | 'step' | 'to' | 'all' | 'timeline' | 'undo' | 'redo' | 'recipe' | 'mask' | 'apply' | 'export' | null;
 export type TimelineStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 export interface ParameterValidation {
@@ -107,6 +107,7 @@ export type AppAction =
     error: TcadApiError;
   }
   | {type: 'run/started'; operation: Exclude<ActiveMutation, null>; index?: number; invalidateResults?: boolean}
+  | {type: 'export/started'}
   | {type: 'mutation/blocked'; error: TcadApiError}
   | {type: 'run/succeeded'; payload: RunView; index?: number}
   | {type: 'run/failed'; index?: number; error: TcadApiError}
@@ -349,6 +350,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     }
     case 'execution/resultsInvalidated':
       return {...state, recipe: withoutExecutionResults(state.recipe, action.index)};
+    case 'export/started':
+      return {...state, phase: 'running', activeMutation: 'export'};
     case 'run/started': {
       const executing = ['step', 'to', 'all'].includes(action.operation);
       const start = action.operation === 'step' || action.invalidateResults ? action.index : undefined;

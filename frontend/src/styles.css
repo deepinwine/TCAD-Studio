@@ -1427,3 +1427,18 @@ button:focus-visible,
   .workspace-separator { display: none; }
   .workspace-parameters > .parameter-pane { position: static; width: 100%; height: auto; min-height: 300px; }
 }
+
+.structure-export-dialog {
+  box-sizing: border-box; width: min(36rem, calc(100vw - 2rem)); max-height: calc(100vh - 2rem);
+  overflow: auto; color: #e6edf5; background: #18212d; border: 1px solid #526173; border-radius: 10px; padding: 1.25rem;
+  overflow-wrap: anywhere; line-height: 1.5;
+}
+.structure-export-dialog::backdrop {background: rgb(0 0 0 / 55%);}
+.structure-export-dialog h2 {margin-top: 0;}
+.structure-export-dialog .structure-export-warning {border-left: 3px solid #e4b45f; padding-left: .75rem;}
+.structure-export-dialog label {display: flex; align-items: flex-start; gap: .5rem;}
+.structure-export-dialog input[type="checkbox"] {flex: 0 0 auto; margin-top: .3rem;}
+.structure-export-dialog .structure-export-actions {display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .75rem; margin-top: 1rem;}
+.structure-export-dialog .toolbar-button {white-space: normal;}
+
+.structure-export-dialog .structure-export-heading {display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem;}

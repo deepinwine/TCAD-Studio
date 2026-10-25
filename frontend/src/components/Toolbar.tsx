@@ -8,6 +8,8 @@ import type {TcadApi} from '../api/types';
 import {ProjectSettings} from './ProjectSettings';
 import {isStructureFlow} from './processCatalog';
 import {ErrorNotice} from './ErrorNotice';
+import {StructureExportDialog} from './StructureExportDialog';
+import {structureExportBlock} from './structureExportState';
 
 interface ToolbarProps {
   api?: TcadApi;
@@ -27,6 +29,7 @@ const operationKeys: Record<Exclude<ActiveMutation, null>, TranslationKey> = {
   recipe: 'operation.recipe',
   mask: 'operation.mask',
   apply: 'operation.to',
+  export: 'structureExport.title',
 };
 
 export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarProps) {
@@ -34,6 +37,9 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
   const {t} = useI18n();
   const [recipeToolsOpen, setRecipeToolsOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
+  const [structureExportOpen, setStructureExportOpen] = useState(false);
+  const exportSupported = Boolean(api?.prepareStructureExport && api?.downloadStructureExport);
+  const exportBlock = structureExportBlock(state, exportSupported);
   const [demoChoice, setDemoChoice] = useState('');
   const [recipeName, setRecipeName] = useState('');
   const [importFileError, setImportFileError] = useState<'read' | 'json' | null>(null);
@@ -135,6 +141,12 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
         >
           {t('toolbar.redo')}
         </button>
+        <button type="button" className="toolbar-button" disabled={exportBlock !== null}
+          title={exportBlock === null ? undefined : t(`structureExport.block.${exportBlock}`)}
+          aria-describedby={exportBlock === null ? undefined : 'structure-export-block'}
+          onClick={() => setStructureExportOpen(true)}>{t('structureExport.title')}</button>
+        {exportBlock !== null && <span id="structure-export-block" className="visually-hidden">{t(`structureExport.block.${exportBlock}`)}</span>}
+        {structureExportOpen && <StructureExportDialog supported={exportSupported} onClose={() => setStructureExportOpen(false)} />}
         <button type="button" className="toolbar-button" aria-controls="recipe-tools" aria-expanded={recipeToolsOpen} onClick={() => setRecipeToolsOpen(value => !value)}>{t('toolbar.recipeActions')}</button>
         <div id="recipe-tools" className="toolbar-recipe-tools" hidden={!recipeToolsOpen}>
         <select
