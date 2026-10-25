@@ -23,6 +23,21 @@ describe.each([
     expect(parameterValidationMessage('validation.maximum', angle, t, 'rad')).toBe(`${maximum}${String(Math.PI / 2)} rad`);
     expect(parameterValidationMessage('validation.maximum', angle, t, '°')).toBe(`${maximum}90°`);
   });
+  it('preserves the canonical minimum when a nonzero angle underflows to zero radians', () => {
+    const angle = {...length, minimum: Number.MIN_VALUE, units: 'degree', dimension: 'angle', canonicalUnit: 'degree', displayUnits: ['°', 'rad']};
+    expect(units.fromCanonical(angle.minimum, 'angle', 'rad')).toBe(0);
+    expect(parameterValidationMessage('validation.minimum', angle, t, 'rad')).toBe(`${minimum}5e-324°`);
+  });
+  it('preserves the canonical negative maximum when its radian conversion underflows', () => {
+    const angle = {...length, maximum: -Number.MIN_VALUE, units: 'degree', dimension: 'angle', canonicalUnit: 'degree', displayUnits: ['°', 'rad']};
+    expect(Object.is(units.fromCanonical(angle.maximum, 'angle', 'rad'), -0)).toBe(true);
+    expect(parameterValidationMessage('validation.maximum', angle, t, 'rad')).toBe(`${maximum}-5e-324°`);
+  });
+  it('keeps a real zero angle boundary in the selected radian unit', () => {
+    const angle = {...length, minimum: 0, maximum: 0, units: 'degree', dimension: 'angle', canonicalUnit: 'degree', displayUnits: ['°', 'rad']};
+    expect(parameterValidationMessage('validation.minimum', angle, t, 'rad')).toBe(`${minimum}0 rad`);
+    expect(parameterValidationMessage('validation.maximum', angle, t, 'rad')).toBe(`${maximum}0 rad`);
+  });
   it('uses original units when metadata is missing, inconsistent or the display unit is illegal', () => {
     expect(parameterValidationMessage('validation.minimum', {...length, dimension: undefined, units: 'mJ/cm²'}, t, 'µm')).toBe(`${minimum}0 mJ/cm²`);
     expect(parameterValidationMessage('validation.maximum', {...length, canonicalUnit: 's', units: 'legacy'}, t, 'µm')).toBe(`${maximum}1000 legacy`);

@@ -176,3 +176,22 @@ describe('具体字段错误', () => {
     }
   });
 });
+
+it.each([
+  {locale: 'zh-CN', label: '侧壁角（相对底面）', unitLabel: '侧壁角（相对底面）单位', message: '必须大于或等于 5e-324°', confirmText: '确认添加'},
+  {locale: 'en', label: 'Sidewall angle (from base plane)', unitLabel: 'Sidewall angle (from base plane) unit', message: 'Must be greater than or equal to 5e-324°', confirmText: 'Add step'},
+])('$locale legacy Etch zero rad stays invalid with the nonzero canonical minimum', ({locale, label, unitLabel, message, confirmText}) => {
+  localStorage.setItem('tcad.locale.v1', locale);
+  const confirm = vi.fn(async () => {});
+  const legacyEtch: StepView = {...template, name: 'Etch', instanceName: 'Etch', params: {sidewall_angle_deg: 88}, parameterSpecs: [{key: 'sidewall_angle_deg', label: 'Sidewall angle', type: 'float', defaultValue: 88, minimum: Number.MIN_VALUE, maximum: 90, dimension: 'angle', canonicalUnit: 'degree', displayUnits: ['°', 'rad'], capabilityKey: 'etch.sidewall_angle'}]};
+  render(<I18nProvider><AddStepDialog template={legacyEtch} busy={false} onCancel={() => {}} onConfirm={confirm} /></I18nProvider>);
+  fireEvent.change(screen.getByLabelText(unitLabel), {target: {value: 'rad'}});
+  const input = screen.getByLabelText(label);
+  fireEvent.change(input, {target: {value: '0'}});
+  expect(screen.getByRole('alert')).toHaveTextContent(message);
+  expect(input).toHaveAttribute('aria-invalid', 'true');
+  expect(input).toHaveAttribute('aria-describedby', screen.getByRole('alert').id);
+  expect(screen.getByRole('button', {name: confirmText})).toBeDisabled();
+  fireEvent.submit(input.closest('form')!);
+  expect(confirm).not.toHaveBeenCalled();
+});

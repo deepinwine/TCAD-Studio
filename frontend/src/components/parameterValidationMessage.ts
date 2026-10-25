@@ -26,7 +26,9 @@ export function parameterValidationMessage(
       return withUnit(value, spec.units);
     }
     try {
-      return withUnit(fromCanonical(value, conversion.dimension, displayUnit), displayUnit);
+      const converted = fromCanonical(value, conversion.dimension, displayUnit);
+      if (value !== 0 && converted === 0) return withUnit(value, canonicalUnit);
+      return withUnit(converted, displayUnit);
     } catch (error) {
       if (!(error instanceof UnitConversionError)) throw error;
       return withUnit(value, canonicalUnit);
