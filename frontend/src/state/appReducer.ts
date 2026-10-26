@@ -40,6 +40,11 @@ export interface ParameterError {
 }
 
 export interface AppState {
+  currentRecipe?: import('../api/types').CurrentRecipeView;
+  recipeSave?: {status: 'saving' | 'success' | 'failed' | 'unconfirmed'; name: string};
+  recipeSessionUncertain?: boolean;
+  recipeOpenError?: TcadApiError | null;
+  recipeOpened?: boolean;
   hiddenStepIds: string[];
   displayManifest: DisplayManifestView | null;
   displayReady: boolean;
@@ -70,6 +75,11 @@ export interface AppState {
 }
 
 export type AppAction =
+  | {type: 'recipe/saveState'; value: AppState['recipeSave']; currentRecipe?: import('../api/types').CurrentRecipeView}
+  | {type: 'recipe/ioStarted'}
+  | {type: 'recipe/openFailed'; error: TcadApiError; uncertain: boolean}
+  | {type: 'recipe/opened'}
+  | {type: 'recipe/sessionConfirmed'}
   | {type: 'display/toggled'; stepId: string}
   | {type: 'display/loaded'; manifest: DisplayManifestView | null; ready: boolean; failed?: boolean}
   | {type: 'candidate/pending'; indices: number[]}
@@ -119,7 +129,7 @@ export type AppAction =
   | {type: 'timeline/restoreSucceeded'; payload: TimelineRestoreView}
   | {type: 'timeline/restoreFailed'; error: TcadApiError}
   | {type: 'history/applied'; model?: ModelSummaryView}
-  | {type: 'recipe/replaced'; recipe: StepView[]; model?: ModelSummaryView}
+  | {type: 'recipe/replaced'; recipe: StepView[]; model?: ModelSummaryView; currentRecipe?: import('../api/types').CurrentRecipeView}
   | {type: 'recipe/stepsReplaced'; recipe: StepView[]}
   | {type: 'step/renamed'; index: number; step: StepView}
   | {type: 'mask/uploaded'; payload: SetStepView}
@@ -248,9 +258,14 @@ function canonicalizeTimeline(timeline: TimelineView): TimelineView {
   };
 }
 
-export function appReducer(state: AppState, action: AppAction): AppState {
+function reduceAppState(state: AppState, action: AppAction): AppState {
   if (action.type === 'candidate/pending') return {...state, pendingTypeEdits: action.indices};
   switch (action.type) {
+    case 'recipe/saveState': return {...state, recipeSave: action.value, ...(action.currentRecipe ? {currentRecipe: action.currentRecipe} : {})};
+    case 'recipe/ioStarted': return {...state, activeMutation: 'recipe', recipeOpenError: null};
+    case 'recipe/openFailed': return {...state, recipeOpenError: action.error, recipeSessionUncertain: action.uncertain || state.recipeSessionUncertain};
+    case 'recipe/opened': return {...state, recipeOpened: true, recipeOpenError: null};
+    case 'recipe/sessionConfirmed': return {...state, recipeSessionUncertain: false, recipeOpenError: null};
     case 'display/loaded': return {...state, displayManifest: action.manifest, displayReady: action.ready,
       hiddenStepIds: action.failed || action.manifest?.available === false ? [] : action.ready ? validHiddenSteps(state.hiddenStepIds, state.recipe, action.manifest, true) : state.hiddenStepIds};
     case 'display/toggled': {
@@ -266,6 +281,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ...state,
         hiddenStepIds: [], displayManifest: null, displayReady: false,
         phase: 'ready',
+        currentRecipe: action.payload.currentRecipe,
+        recipeOpened: false,
         recipe: action.payload.recipe,
         selectedStepIndex: visibleSteps(action.payload.recipe)[0]?.index ?? null,
         previewGeneration: state.previewGeneration + 1,
@@ -490,6 +507,10 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         hiddenStepIds: [], displayManifest: null, displayReady: false,
+        currentRecipe: action.currentRecipe,
+        recipeOpened: false,
+        lastRunResult: undefined,
+        lastModelRevision: null,
         recipe: action.recipe,
         selectedStepIndex: visibleSteps(action.recipe)[0]?.index ?? null,
         model: action.model ?? state.model,
@@ -573,4 +594,14 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         ? {...state, activeMutation: null}
         : {...state, phase: 'ready', activeMutation: null};
   }
+}
+
+// Persistence feedback belongs to the saved source, never to later process edits.
+export function appReducer(state: AppState, action: AppAction): AppState {
+  const next = reduceAppState(state, action);
+  if (action.type !== 'recipe/saveState' && next.recipeSave && next.recipeSave.status !== 'saving'
+    && (next.recipe !== state.recipe || next.model !== state.model
+      || next.historicalStepIndex !== state.historicalStepIndex || next.previewGeneration !== state.previewGeneration
+      || next.drafts !== state.drafts && action.type !== 'parameter/displayChanged')) return {...next, recipeSave: undefined};
+  return next;
 }

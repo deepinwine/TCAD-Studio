@@ -3,7 +3,7 @@ import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {RecipeAssistant} from './RecipeAssistant';
 
 const {importRecipe} = vi.hoisted(() => ({importRecipe: vi.fn()}));
-vi.mock('../state/AppStateContext', () => ({useAppState: () => ({actions: {importRecipe}})}));
+vi.mock('../state/AppStateContext', () => ({useAppState: () => ({state: {recipeSessionUncertain: false}, actions: {importRecipe}})}));
 
 function response(overrides = {}) {
   return {ok: true, draft: {version: 1, sourceText: '沉积氧化硅', steps: [

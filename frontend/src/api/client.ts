@@ -12,6 +12,7 @@ import {
   parseMaskAssetListEnvelope,
   parseRecipeLoadEnvelope,
   parseSavedEnvelope,
+  parseSavedRecipesEnvelope,
   parseMaskUploadEnvelope,
   parseStepEnvelope,
   parseStepListEnvelope,
@@ -452,7 +453,10 @@ export function createTcadApi(): TcadApi {
         signal,
       );
     },
-    saveRecipe(name: string, signal?: AbortSignal): Promise<{saved: boolean}> {
+    listSavedRecipes(signal?: AbortSignal) {
+      return apiGetJson('/api/history', parseSavedRecipesEnvelope, signal);
+    },
+    saveRecipe(name: string, signal?: AbortSignal): Promise<import('./types').SaveRecipeView> {
       return apiPostJson(
         '/api/recipe/save',
         {name},

@@ -37,7 +37,7 @@ interface ValidationView {
  * 应用走既有 /api/recipe/import（冻结契约）。
  */
 export function RecipeAssistant() {
-  const {actions} = useAppState();
+  const {state, actions} = useAppState();
   const {t} = useI18n();
   const [input, setInput] = useState('');
   const [draft, setDraft] = useState<DraftView | null>(null);
@@ -152,7 +152,7 @@ export function RecipeAssistant() {
           <button
             type="button"
             className="toolbar-button"
-            disabled={busy || applying || draft.steps.length === 0}
+            disabled={busy || applying || state.recipeSessionUncertain || draft.steps.length === 0}
             onClick={() => void apply()}
           >
             {applying ? t('recipeAssistant.applying') : t('recipeAssistant.apply')}

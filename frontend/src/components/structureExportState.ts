@@ -23,6 +23,7 @@ export function structureExportNeedsAcknowledgement(state: AppState): boolean {
 }
 export function structureExportBlock(state: AppState, supported: boolean): StructureExportBlock | null {
   if (!supported) return 'unsupported';
+  if (state.recipeSessionUncertain) return 'offline';
   if (state.phase === 'booting' || state.phase === 'fatal') return 'offline';
   if (state.phase === 'running' || state.activeMutation !== null) return 'busy';
   if (state.pendingSaves > 0) return 'saving';

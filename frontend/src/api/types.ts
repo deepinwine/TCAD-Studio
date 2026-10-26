@@ -1,3 +1,7 @@
+export interface CurrentRecipeView {id: string; name: string}
+export interface SavedRecipeSummary {id: string; name: string; timestamp?: string; autosave?: boolean; note?: string}
+export interface SaveRecipeView {saved: boolean; currentRecipe?: CurrentRecipeView; id?: string}
+
 export type RuntimeStatus = 'ready' | 'dirty' | 'running' | 'done' | 'error';
 
 export type Vec3 = readonly [number, number, number];
@@ -62,7 +66,7 @@ export interface InitView {
   uiState: Record<string, unknown>;
   backendCapabilities?: Record<string, string>;
   demoRecipes?: Record<string, DemoRecipeView>;
-  currentRecipe?: {name: string; id: string};
+  currentRecipe?: CurrentRecipeView;
 }
 
 export interface SetStepRequest {
@@ -116,7 +120,7 @@ export interface DemoRecipeView {
 export interface RecipeLoadView {
   model: ModelSummaryView;
   recipe: StepView[];
-  currentRecipe: {name: string; id: string};
+  currentRecipe: CurrentRecipeView;
   log: string[];
 }
 
@@ -275,7 +279,8 @@ export interface TcadApi {
     signal?: AbortSignal,
   ): Promise<RecipeLoadView>;
   newRecipe(name: string, signal?: AbortSignal): Promise<RecipeLoadView>;
-  saveRecipe(name: string, signal?: AbortSignal): Promise<{saved: boolean}>;
+  listSavedRecipes?(signal?: AbortSignal): Promise<SavedRecipeSummary[]>;
+  saveRecipe(name: string, signal?: AbortSignal): Promise<SaveRecipeView>;
   exportRecipe(scope?: string, signal?: AbortSignal): Promise<Blob>;
   loadRecipe(id: string, signal?: AbortSignal): Promise<RecipeLoadView>;
   addStep(name: string, signal?: AbortSignal, configuration?: {params: Record<string, unknown>; instanceName?: string}): Promise<StepView[]>;

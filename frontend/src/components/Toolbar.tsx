@@ -1,4 +1,6 @@
-import {useRef, useState} from 'react';
+import {SavedRecipesDialog} from './SavedRecipesDialog';
+import {cleanRecipeName} from './savedRecipeState';
+import {useEffect, useRef, useState} from 'react';
 import {type ActiveMutation, hasUnsavedDrafts} from '../state/appReducer';
 import {useAppState} from '../state/AppStateContext';
 import {useI18n} from '../i18n/I18nContext';
@@ -35,13 +37,16 @@ const operationKeys: Record<Exclude<ActiveMutation, null>, TranslationKey> = {
 export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarProps) {
   const {state, actions} = useAppState();
   const {t} = useI18n();
+  const [savedRecipesOpen, setSavedRecipesOpen] = useState(false);
   const [recipeToolsOpen, setRecipeToolsOpen] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [structureExportOpen, setStructureExportOpen] = useState(false);
   const exportSupported = Boolean(api?.prepareStructureExport && api?.downloadStructureExport);
   const exportBlock = structureExportBlock(state, exportSupported);
   const [demoChoice, setDemoChoice] = useState('');
-  const [recipeName, setRecipeName] = useState('');
+  const [recipeName, setRecipeName] = useState(state.currentRecipe?.name ?? '');
+  useEffect(() => {setRecipeName(state.currentRecipe?.name ?? '');}, [state.currentRecipe]);
+  const validRecipeName = cleanRecipeName(recipeName) !== null;
   const [importFileError, setImportFileError] = useState<'read' | 'json' | null>(null);
   const importInputRef = useRef<HTMLInputElement | null>(null);
   const demoRecipes = state.demoRecipes;
@@ -60,7 +65,7 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
     : '';
   const draftBlocked = hasUnsavedDrafts(state);
   const selectedMissing = state.selectedStepIndex === null;
-  const allRunsDisabled = mutationActive || draftBlocked || state.pendingSaves > 0 || state.pendingTypeEdits.length > 0;
+  const allRunsDisabled = Boolean(state.recipeSessionUncertain) || !online || mutationActive || draftBlocked || state.pendingSaves > 0 || state.pendingTypeEdits.length > 0;
   const describedBy = draftBlocked ? draftGuidanceId : undefined;
 
   async function importFile(file: File) {
@@ -149,6 +154,8 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
         {structureExportOpen && <StructureExportDialog supported={exportSupported} onClose={() => setStructureExportOpen(false)} />}
         <button type="button" className="toolbar-button" aria-controls="recipe-tools" aria-expanded={recipeToolsOpen} onClick={() => setRecipeToolsOpen(value => !value)}>{t('toolbar.recipeActions')}</button>
         <div id="recipe-tools" className="toolbar-recipe-tools" hidden={!recipeToolsOpen}>
+        <button type="button" className="toolbar-button" disabled={mutationActive} onClick={() => setSavedRecipesOpen(true)}>{t('savedRecipes.title')}</button>
+        {savedRecipesOpen && <SavedRecipesDialog api={api} onClose={() => setSavedRecipesOpen(false)} />}
         <select
           className="toolbar-button"
           aria-label={t('toolbar.demoRecipe')}
@@ -184,15 +191,14 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
           placeholder={t('toolbar.recipeName')}
           value={recipeName}
           disabled={allRunsDisabled}
-          onChange={event => setRecipeName(event.target.value)}
+          onChange={event => {setRecipeName(event.target.value); actions.clearRecipeSave();}}
         />
         <button
           type="button"
           className="toolbar-button"
-          disabled={allRunsDisabled || recipeName.trim() === ''}
+          disabled={allRunsDisabled || !validRecipeName}
           onClick={() => {
             void actions.newRecipe(recipeName.trim());
-            setRecipeName('');
           }}
         >
           {t('toolbar.newRecipe')}
@@ -200,7 +206,7 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
         <button
           type="button"
           className="toolbar-button"
-          disabled={allRunsDisabled || recipeName.trim() === ''}
+          disabled={allRunsDisabled || !validRecipeName}
           onClick={() => {
             void actions.saveRecipe(recipeName.trim());
           }}
@@ -208,6 +214,9 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
         >
           {t('toolbar.saveRecipe')}
         </button>
+        <span className="toolbar-gate-copy">{t('savedRecipes.rename')}</span>
+        {Array.from(recipeName.trim()).length > 80 && <span role="alert">{t('savedRecipes.invalidName')}</span>}
+        {state.recipeSave && <span role="status">{t(`savedRecipes.save.${state.recipeSave.status}`, {name: state.recipeSave.name})}</span>}
         <button
           type="button"
           className="toolbar-button"
@@ -245,6 +254,8 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
             message={t(importFileError === 'read' ? 'toolbar.importFileReadError' : 'toolbar.importFileJsonError')}
           />
         )}
+        {state.recipeOpened && <p role="status">{t('savedRecipes.restored')}</p>}
+        {state.recipeSessionUncertain && <div role="alert"><p>{t('savedRecipes.uncertain')}</p><button type="button" disabled={mutationActive} onClick={() => void actions.resyncRecipeSession()}>{t('savedRecipes.resync')}</button></div>}
         {draftBlocked && (
           <span id={draftGuidanceId} className="toolbar-gate-copy" role="status">
             {t('toolbar.draftGuidance')}

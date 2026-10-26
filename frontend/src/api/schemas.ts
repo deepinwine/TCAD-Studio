@@ -448,9 +448,10 @@ export function parseRecipeLoadEnvelope(
   flagField: 'imported' | 'loaded' | null,
 ): RecipeLoadView {
   const result = requireOkResult(payload);
-  if (flagField !== null && result[flagField] !== undefined) {
-    requireBoolean(result[flagField], `result.${flagField}`);
+  if (flagField !== null && result[flagField] !== undefined && requireBoolean(result[flagField], `result.${flagField}`) !== true) {
+    throw new ApiContractError(`result.${flagField}`, 'true');
   }
+  if (flagField === 'loaded' && result.loaded !== true) throw new ApiContractError('result.loaded', 'true');
   return {
     model: parseModel(result.model, 'result.model'),
     recipe: parseRecipe(result.recipe, 'result.recipe'),
@@ -640,11 +641,30 @@ export function parseStepEnvelope(payload: unknown, index: number): StepView {
   return parseStep(result, 'result', index);
 }
 
-export function parseSavedEnvelope(payload: unknown): {saved: boolean} {
+export function parseSavedEnvelope(payload: unknown): import('./types').SaveRecipeView {
   const result = requireOkResult(payload);
-  return {
-    saved: result.saved === undefined ? true : requireBoolean(result.saved, 'result.saved'),
-  };
+  const view: import('./types').SaveRecipeView = {saved: requireBoolean(result.saved, 'result.saved')};
+  if (result.current_recipe !== undefined) view.currentRecipe = parseCurrentRecipe(result.current_recipe);
+  if (result.id !== undefined) view.id = requireString(result.id, 'result.id');
+  return view;
+}
+
+export function parseSavedRecipesEnvelope(payload: unknown): import('./types').SavedRecipeSummary[] {
+  const envelope = requireRecord(payload, '$');
+  if (envelope.ok !== true) throw new ApiContractError('ok', 'true');
+  const ids = new Set<string>();
+  const entries = requireArray(envelope.result, 'result').map((value, index) => {
+    const path = `result[${index}]`; const row = requireRecord(value, path);
+    const id = requireString(row.id, `${path}.id`);
+    if (!id.trim() || ids.has(id)) throw new ApiContractError(`${path}.id`, 'unique non-empty id');
+    ids.add(id);
+    const entry: import('./types').SavedRecipeSummary = {id, name: requireString(row.name, `${path}.name`)};
+    if (row.timestamp !== undefined) entry.timestamp = requireString(row.timestamp, `${path}.timestamp`);
+    if (row.autosave !== undefined) entry.autosave = requireBoolean(row.autosave, `${path}.autosave`);
+    if (row.note !== undefined) entry.note = requireString(row.note, `${path}.note`);
+    return entry;
+  });
+  return entries.sort((a, b) => (b.timestamp ?? '').localeCompare(a.timestamp ?? '') || a.id.localeCompare(b.id));
 }
 
 export function parseHistoryEnvelope(

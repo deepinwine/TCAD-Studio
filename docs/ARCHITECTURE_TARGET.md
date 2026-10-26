@@ -85,19 +85,19 @@ the frozen-core tests when changing those fields.
 | Endpoint | Method | Request (minimal) | Response |
 | --- | --- | --- | --- |
 | `/api/health` | GET | — | JSON |
-| `/api/init` | GET | — | JSON; `result`: `recipe`、`model`、`recipe_factories`、`materials`、`demo_recipes`、`recipes`、`ui_state`、`backend_capabilities`（加法能力矩阵）；可选加法字段 `factory_templates` 为带 `parameter_specs` 的默认 Step 列表，供添加表单使用；`recipe[].parameter_specs[]` 的加法字段：`dimension`、`canonical_unit`、`display_units`、`capability_key`、`active_when`；步骤可选只读 `execution_result:{reference_z_nm:number}`，生命周期与命名 HTTP 测试见下文 |
+| `/api/init` | GET | — | JSON; `result`: `recipe`、`model`、`recipe_factories`、`materials`、`demo_recipes`、`recipes`、`ui_state`、`backend_capabilities`（加法能力矩阵）；当前配方身份 `current_recipe:{id,name}`；可选加法字段 `factory_templates` 为带 `parameter_specs` 的默认 Step 列表，供添加表单使用；`recipe[].parameter_specs[]` 的加法字段：`dimension`、`canonical_unit`、`display_units`、`capability_key`、`active_when`；步骤可选只读 `execution_result:{reference_z_nm:number}`，生命周期与命名 HTTP 测试见下文 |
 | `/api/status` | GET | — | JSON |
 | `/api/log` | GET | — | JSON |
-| `/api/history` | GET | — | JSON（历史清单） |
+| `/api/history` | GET | — | JSON；`result:[{id,name,timestamp?,autosave?,note?,…}]` 历史清单；`autosave` 表示自动保存文件存在，不代表未手动保存；内部 `file` 不供客户端打开 |
 | `/api/process_config` | GET | — | JSON |
 | `/api/load_autosave` | POST | `{}` | JSON |
-| `/api/recipe/new` | POST | `{name, current_name?}` | JSON |
-| `/api/recipe/save` | POST | `{name, note?, ui_state?}` | JSON |
-| `/api/recipe/load` | POST | `{id, current_name?}` | JSON |
+| `/api/recipe/new` | POST | `{name, current_name?}` | JSON；`result.current_recipe:{id,name}` 为当前身份 |
+| `/api/recipe/save` | POST | `{name, note?, ui_state?}` | JSON；`result.saved:true`、`id`、`current_recipe:{id,name}`；更新当前条目，非另存为 |
+| `/api/recipe/load` | POST | `{id, current_name?}` | JSON；`result.loaded:true`、`recipe`、`model`、`current_recipe:{id,name}`，恢复保存模型且运行状态 Ready，不执行步骤；失败不替换客户端结构，网络不确定需只读同步 |
 | `/api/recipe/delete` | POST | `{id}` | JSON |
 | `/api/recipe/set_name` | POST | `{name}` | JSON |
 | `/api/recipe/export` | GET | query `id` 或 `scope=current` | JSON（**裸 recipe blob**，无 `ok` 封套；含 `steps_full`） |
-| `/api/recipe/import` | POST | `{recipe, autosave_current?, current_name?}` | JSON |
+| `/api/recipe/import` | POST | `{recipe, autosave_current?, current_name?}` | JSON；`result.current_recipe:{id,name}` 为导入后的当前身份 |
 | `/api/recipe/add` | POST | `{name, insert_index?, params?, instance_name?}` | JSON; `result`: step list；可选 `params` 和 `instance_name` 在 detached candidate 校验后一次添加，非法输入为既有 `ok:false` JSON 封套，不改变配方；旧 name-only 行为保留 |
 | `/api/recipe/insert_steps` | POST | `{steps, insert_index?}` | JSON; `result`: step list |
 | `/api/recipe/remove` | POST | `{index}` | JSON; `result`: step list |
@@ -138,6 +138,14 @@ the frozen-core tests when changing those fields.
 | `/api/save` | POST | `{}` | JSON |
 | `/api/export` | POST | 导出选项 JSON：`sti?`、`cross?`、`metrics?`、`merge_same_materials?`；可选布尔 `include_agent_report` 缺省 `true`，`false` 只跳过 `agent_report.md`，非布尔拒绝且不写文件 | JSON；`result.zip_file` 为 ZIP 基名、`files` 为文件清单；当前完整模型导出不运行 Recipe |
 | `/api/export/download` | GET | query `file` | **binary** attachment |
+
+已保存配方加法消费由 `tests/test_saved_recipes_http.py::SavedRecipesHTTPTests`
+覆盖：`test_named_save_switch_autosave_and_load_restore_geometry_without_execute`
+检验同名不同 id、手动保存和切换后较新自动保存、无效 id、真实 grid/owners/step_id、
+domain 与不可变 mask revision，并断言加载不执行步骤；
+`test_saved_recipe_survives_server_restart_and_remains_ready_without_snapshots`
+检验重启恢复以及加载后 Ready、无逐步快照。React 只按历史 id 打开，
+不拼接历史文件路径；未知加载结果采用只读 init/timeline 同步后再解锁写入与导出。
 
 结构导出加法契约由 `tests/test_structure_export_http.py::StructureExportHTTPTests` 覆盖：
 `test_complete_material_zip_excludes_agent_report_and_preserves_current_model` 检查报告关闭、

@@ -1442,3 +1442,10 @@ button:focus-visible,
 .structure-export-dialog .toolbar-button {white-space: normal;}
 
 .structure-export-dialog .structure-export-heading {display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem;}
+
+.saved-recipes-dialog {max-width: min(640px, calc(100vw - 32px));}
+.saved-recipes-list {max-height: 42vh; overflow-y: auto; margin: 12px 0; border: 1px solid var(--border-color, #394354);}
+.saved-recipes-row {display: flex; gap: 10px; padding: 10px; align-items: start; cursor: pointer;}
+.saved-recipes-row span {min-width: 0; overflow-wrap: anywhere;}
+.saved-recipes-row small {display: block; opacity: .8; margin-top: 4px;}
+.saved-recipes-row em {margin-left: 10px; color: #82c5fa;}

@@ -64,7 +64,7 @@ function StudioShell({api, viewerRuntimeFactory}: {api: TcadApi; viewerRuntimeFa
   }
 
   const openMask = async () => {
-    if (selectedStep === null || openingMask || state.activeMutation !== null)
+    if (selectedStep === null || openingMask || state.recipeSessionUncertain || state.activeMutation !== null)
       return;
     const controller = new AbortController();
     maskController.current = controller;
@@ -121,9 +121,9 @@ function StudioShell({api, viewerRuntimeFactory}: {api: TcadApi; viewerRuntimeFa
               : state.globalError.suggestion}
             trustedSuggestion={state.globalError.code === 'network_error'}
             rolledBack={state.globalError.rolledBack}
-            actionLabel={state.globalError.code === 'network_error' ? t('error.reconcile') : undefined}
+            actionLabel={state.globalError.code === 'network_error' ? t(state.recipeSessionUncertain ? 'savedRecipes.resync' : 'error.reconcile') : undefined}
             onAction={state.globalError.code === 'network_error'
-              ? () => void actions.reconcile()
+              ? () => void (state.recipeSessionUncertain ? actions.resyncRecipeSession() : actions.reconcile())
               : undefined}
           />
         </div>

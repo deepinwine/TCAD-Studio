@@ -39,7 +39,7 @@ export function TimelineBar() {
   const timeline = state.timeline;
   const draftBlocked = hasUnsavedDrafts(state);
   const mutationActive = state.phase === 'running' || state.activeMutation !== null;
-  const restoreDisabled = mutationActive || draftBlocked || state.pendingTypeEdits.length > 0;
+  const restoreDisabled = Boolean(state.recipeSessionUncertain) || mutationActive || draftBlocked || state.pendingTypeEdits.length > 0;
   const neighbors = timeline === null
     ? {}
     : validNeighbors(timeline.items, timeline.current);

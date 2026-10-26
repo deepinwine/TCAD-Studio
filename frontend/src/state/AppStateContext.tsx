@@ -11,8 +11,9 @@ import {
 } from 'react';
 import {TcadApiError} from '../api/client';
 import {sameStructureExportSource, structureExportSource, structureExportBlock, structureExportNeedsAcknowledgement, type StructureExportConfirmation, type StructureExportProgress} from '../components/structureExportState';
-import {parseStructureExportEnvelope} from '../api/schemas';
+import {ApiContractError, parseStructureExportEnvelope} from '../api/schemas';
 import {isInitializer} from '../components/processCatalog';
+import {cleanRecipeName} from '../components/savedRecipeState';
 import {draftIsActive, parameterIsActive, parameterValues} from '../components/parameterActivity';
 import {validateParameter} from '../components/parameterValidation';
 import type {
@@ -60,6 +61,9 @@ export interface AppStateActions {
   importRecipe(request: {recipe: unknown; name?: string}): Promise<boolean>;
   newRecipe(name: string): Promise<void>;
   saveRecipe(name: string): Promise<void>;
+  clearRecipeSave(): void;
+  openSavedRecipe(id: string): Promise<boolean>;
+  resyncRecipeSession(): Promise<boolean>;
   exportRecipe(): Promise<void>;
   exportStructure(confirmation: StructureExportConfirmation, progress?: (phase: StructureExportProgress) => void): Promise<{ok: boolean; error?: TcadApiError}>;
   addStep(name: string, configuration?: {params: Record<string, unknown>; instanceName?: string}): Promise<boolean>;
@@ -234,7 +238,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     rawValue?: string | boolean,
     displayUnit?: string,
   ): number => {
-    if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null) return 0;
+    if (!mountedRef.current || stateRef.current.recipeSessionUncertain || applyingRef.current || mutationGateRef.current !== null) return 0;
     const draftKey = parameterDraftKey(index, key);
     const previous = Math.max(
       sequenceRef.current[draftKey] ?? 0,
@@ -260,7 +264,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [dispatch]);
 
   const saveParameterInternal = useCallback((index: number, key: string, applying = false): Promise<void> => {
-    if (!mountedRef.current || mutationGateRef.current !== null || (applyingRef.current && !applying)) return Promise.resolve();
+    if (!mountedRef.current || stateRef.current.recipeSessionUncertain || mutationGateRef.current !== null || (applyingRef.current && !applying)) return Promise.resolve();
     const draftKey = parameterDraftKey(index, key);
     const draft = stateRef.current.drafts[draftKey];
     const step = stateRef.current.recipe.find(step => step.index === index);
@@ -336,7 +340,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   const saveParameter = useCallback((index: number, key: string) => saveParameterInternal(index, key), [saveParameterInternal]);
 
   const beginMutation = useCallback((operation: Exclude<ActiveMutation, null>, index?: number, invalidateResults = false): boolean => {
-    if (candidateIndicesRef.current.size) return false;
+    if (stateRef.current.recipeSessionUncertain || stateRef.current.phase !== 'ready' || candidateIndicesRef.current.size) return false;
     if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null || pendingSaveCountRef.current > 0) return false;
     if (invalidActiveConfiguration(stateRef.current)) {
       dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {
@@ -447,7 +451,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
 
   const applyAndRunTo = useCallback(async (index = stateRef.current.selectedStepIndex ?? undefined) => {
     if (candidateIndicesRef.current.size) return;
-    if (index === undefined || !mountedRef.current || applyingRef.current || mutationGateRef.current !== null) return;
+    if (index === undefined || !mountedRef.current || stateRef.current.recipeSessionUncertain || applyingRef.current || mutationGateRef.current !== null) return;
     if (invalidActiveConfiguration(stateRef.current)) {
       dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {status: 400, code: 'invalid_draft'})});
       return;
@@ -620,7 +624,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
 
   const selectedStepIndexForOps = () => stateRef.current.selectedStepIndex;
   const replaceStep = useCallback(async (index: number, name: string, configuration: {params: Record<string, unknown>; instanceName?: string}): Promise<boolean> => {
-    if (!mountedRef.current || applyingRef.current || mutationGateRef.current !== null) return false;
+    if (!mountedRef.current || stateRef.current.recipeSessionUncertain || applyingRef.current || mutationGateRef.current !== null) return false;
     if (invalidActiveConfiguration(stateRef.current)) {
       dispatch({type: 'mutation/blocked', error: new TcadApiError('Invalid parameter draft', {status: 400, code: 'invalid_draft'})});
       return false;
@@ -720,6 +724,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
       dispatch({
         type: 'recipe/replaced',
         recipe: view.recipe,
+        currentRecipe: view.currentRecipe,
         ...(view.model !== undefined ? {model: view.model} : {}),
       });
       applied = true;
@@ -761,23 +766,85 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   ), [api, replaceRecipe]);
 
   const newRecipeAction = useCallback(async (name: string): Promise<void> => {
-    await replaceRecipe(signal => api.newRecipe(name, signal));
+    const clean = cleanRecipeName(name);
+    if (clean === null) return;
+    await replaceRecipe(signal => api.newRecipe(clean, signal));
   }, [api, replaceRecipe]);
 
-  const saveRecipeAction = useCallback(async (name: string): Promise<void> => {
-    if (!beginMutation('recipe')) return;
+  // Saving/opening hold the shared synchronous gate without entering process running.
+  const beginRecipeIO = useCallback((allowUncertain = false): boolean => {
+    const current = stateRef.current;
+    if (!mountedRef.current || current.phase !== 'ready' || (!allowUncertain && current.recipeSessionUncertain)
+      || applyingRef.current || mutationGateRef.current !== null || pendingSaveCountRef.current > 0
+      || candidateIndicesRef.current.size > 0 || hasUnsavedDrafts(current)) return false;
+    cancelStandaloneTimeline();
+    mutationGateRef.current = 'recipe';
+    dispatch({type: 'recipe/ioStarted'});
+    return true;
+  }, [cancelStandaloneTimeline, dispatch]);
+
+  const saveRecipeAction = useCallback(async (input: string): Promise<void> => {
+    const name = cleanRecipeName(input);
+    if (name === null || !beginRecipeIO()) return;
+    dispatch({type: 'recipe/saveState', value: {status: 'saving', name}});
     const controller = createController();
     try {
-      await api.saveRecipe(name, controller.signal);
+      const result = await api.saveRecipe(name, controller.signal);
+      if (!mountedRef.current || controller.signal.aborted) return;
+      const identity = result.currentRecipe;
+      dispatch({type: 'recipe/saveState', value: {status: result.saved !== true ? 'failed'
+        : identity?.id.trim() ? 'success' : 'unconfirmed', name: identity?.name ?? name},
+        ...(result.saved === true && identity?.id.trim() ? {currentRecipe: identity} : {})});
     } catch (error) {
-      if (!mountedRef.current) return;
-      if (isAbortError(error, controller.signal)) return;
-      dispatch({type: 'run/failed', error: normalizeError(error)});
-    } finally {
-      releaseController(controller);
-      finishMutation('recipe');
-    }
-  }, [api, beginMutation, createController, dispatch, finishMutation, releaseController]);
+      if (!mountedRef.current || controller.signal.aborted) return;
+      const rejected = error instanceof TcadApiError && error.status > 0 && !['invalid_json', 'network_error'].includes(error.code ?? '');
+      dispatch({type: 'recipe/saveState', value: {status: rejected ? 'failed' : 'unconfirmed', name}});
+    } finally {releaseController(controller); finishMutation('recipe');}
+  }, [api, beginRecipeIO, createController, dispatch, finishMutation, releaseController]);
+
+  const openSavedRecipe = useCallback(async (id: string): Promise<boolean> => {
+    if (!id.trim() || !beginRecipeIO()) return false;
+    const controller = createController();
+    try {
+      const view = await api.loadRecipe(id, controller.signal);
+      if (!mountedRef.current || controller.signal.aborted) return false;
+      // Optional injected APIs must provide authoritative data too.
+      if (!view.model || !Array.isArray(view.recipe) || !view.currentRecipe?.id.trim()) throw new ApiContractError('load', 'authoritative recipe/model/identity');
+      dispatch({type: 'recipe/replaced', recipe: view.recipe, model: view.model, currentRecipe: view.currentRecipe});
+      dispatch({type: 'recipe/opened'});
+      const generation = ++timelineGenerationRef.current;
+      try {
+        const timeline = await api.getTimeline(controller.signal);
+        if (mountedRef.current && !controller.signal.aborted && generation === timelineGenerationRef.current) dispatch({type: 'timeline/loaded', payload: timeline});
+      } catch (error) {
+        if (mountedRef.current && !isAbortError(error, controller.signal) && generation === timelineGenerationRef.current) dispatch({type: 'timeline/loadFailed', error: normalizeError(error)});
+      }
+      return true;
+    } catch (error) {
+      if (!mountedRef.current || controller.signal.aborted) return false;
+      const rejected = error instanceof TcadApiError && error.status > 0 && !['invalid_json', 'network_error'].includes(error.code ?? '');
+      dispatch({type: 'recipe/openFailed', error: normalizeError(error), uncertain: !rejected});
+      return false;
+    } finally {releaseController(controller); finishMutation('recipe');}
+  }, [api, beginRecipeIO, createController, dispatch, finishMutation, releaseController]);
+
+  const resyncRecipeSession = useCallback(async (): Promise<boolean> => {
+    if (!stateRef.current.recipeSessionUncertain || !beginRecipeIO(true)) return false;
+    const controller = createController();
+    const generation = ++timelineGenerationRef.current;
+    try {
+      const init = await api.init(controller.signal);
+      const timeline = await api.getTimeline(controller.signal);
+      if (!mountedRef.current || controller.signal.aborted || generation !== timelineGenerationRef.current) return false;
+      dispatch({type: 'bootstrap/succeeded', payload: init});
+      dispatch({type: 'timeline/loaded', payload: timeline});
+      dispatch({type: 'recipe/sessionConfirmed'});
+      return true;
+    } catch (error) {
+      if (mountedRef.current && !controller.signal.aborted) dispatch({type: 'recipe/openFailed', error: normalizeError(error), uncertain: true});
+      return false;
+    } finally {releaseController(controller); finishMutation('recipe');}
+  }, [api, beginRecipeIO, createController, dispatch, finishMutation, releaseController]);
 
   const exportStructure = useCallback(async (
     confirmation: StructureExportConfirmation,
@@ -785,7 +852,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   ): Promise<{ok: boolean; error?: TcadApiError}> => {
     const current = stateRef.current;
     const blocked = structureExportBlock(current, Boolean(api.prepareStructureExport && api.downloadStructureExport));
-    if (!mountedRef.current || blocked !== null || applyingRef.current || mutationGateRef.current !== null
+    if (!mountedRef.current || current.recipeSessionUncertain || blocked !== null || applyingRef.current || mutationGateRef.current !== null
       || pendingSaveCountRef.current > 0 || candidateIndicesRef.current.size > 0 || invalidActiveConfiguration(current)
       || !sameStructureExportSource(confirmation.source, structureExportSource(current))
       || (structureExportNeedsAcknowledgement(current) && !confirmation.acknowledged)) {
@@ -831,6 +898,11 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [api, cancelStandaloneTimeline, createController, dispatch, releaseController]);
 
   const exportRecipeAction = useCallback(async (): Promise<void> => {
+    if (!mountedRef.current || stateRef.current.recipeSessionUncertain || stateRef.current.phase !== 'ready'
+      || applyingRef.current || mutationGateRef.current !== null || pendingSaveCountRef.current > 0) return;
+    cancelStandaloneTimeline();
+    mutationGateRef.current = 'export';
+    dispatch({type: 'export/started'});
     const controller = createController();
     try {
       const blob = await api.exportRecipe('current', controller.signal);
@@ -846,8 +918,12 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
       dispatch({type: 'run/failed', error: normalizeError(error)});
     } finally {
       releaseController(controller);
+      if (mutationGateRef.current === 'export') {
+        mutationGateRef.current = null;
+        dispatch({type: 'mutation/finished'});
+      }
     }
-  }, [api, createController, dispatch, releaseController]);
+  }, [api, cancelStandaloneTimeline, createController, dispatch, releaseController]);
 
   /**
    * 撤销/重做：applied 时 bump previewGeneration（几何权威是 manifest.rev，
@@ -946,12 +1022,12 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
   }, [bootstrap]);
 
   const actions = useMemo<AppStateActions>(() => ({
-    invalidateExecutionResults: index => {if (mutationGateRef.current !== 'export') dispatch({type: 'execution/resultsInvalidated', index});},
+    invalidateExecutionResults: index => {if (!stateRef.current.recipeSessionUncertain && mutationGateRef.current !== 'export') dispatch({type: 'execution/resultsInvalidated', index});},
     beginMaskWrite,
     endMaskWrite,
     toggleStepVisibility: stepId => dispatch({type: 'display/toggled', stepId}),
     setDisplayReady: (manifest, ready, failed) => dispatch({type: 'display/loaded', manifest, ready, failed}),
-    applyMaskAsset: payload => {if (mutationGateRef.current !== 'export') dispatch({type: 'mask/assetApplied', payload});},
+    applyMaskAsset: payload => {if (!stateRef.current.recipeSessionUncertain && mutationGateRef.current !== 'export') dispatch({type: 'mask/assetApplied', payload});},
     reportMaskError: error => {if (mutationGateRef.current !== 'export') dispatch({type: 'mutation/blocked', error: normalizeError(error)});},
     updateDraftDisplay,
     bootstrap,
@@ -970,6 +1046,9 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     importRecipe,
     newRecipe: newRecipeAction,
     saveRecipe: saveRecipeAction,
+    clearRecipeSave: () => dispatch({type: 'recipe/saveState', value: undefined}),
+    openSavedRecipe,
+    resyncRecipeSession,
     exportRecipe: exportRecipeAction,
     exportStructure,
     addStep: addStepAction,
@@ -982,6 +1061,9 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
     uploadMask: uploadMaskAction,
   }), [
     dispatch,
+    saveRecipeAction,
+    openSavedRecipe,
+    resyncRecipeSession,
     beginMaskWrite,
     endMaskWrite,
     addStepAction,

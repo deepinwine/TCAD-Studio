@@ -241,6 +241,67 @@ describe('Toolbar 配方管理', () => {
     await waitFor(() => expect(api.exportRecipe).toHaveBeenCalledTimes(1));
   });
 
+  it('accepts exactly 80 Unicode characters and rejects 81 before a server can truncate', async () => {
+    const api = apiStub();
+    render(<App api={api} viewerRuntimeFactory={stubViewerRuntime} />);
+    fireEvent.click(await screen.findByRole('button', {name: '配方操作'}));
+    const input = screen.getByRole('textbox', {name: '配方名称'});
+    fireEvent.change(input, {target: {value: '😀'.repeat(80)}});
+    expect(screen.getByRole('button', {name: '保存配方'})).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', {name: '保存配方'}));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, {target: {value: '😀'.repeat(81)}});
+    expect(screen.getByRole('button', {name: '保存配方'})).toBeDisabled();
+    expect(api.saveRecipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps visible editors disabled while an interrupted open awaits server resync', async () => {
+    const structure = step(0, {name: 'Structure Deposit', instanceName: 'Oxide', params: {dose: 100}});
+    const api = apiStub({
+      init: vi.fn(async () => ({...initView([structure]), currentRecipe: {id: 'old', name: 'Old'}})),
+      listSavedRecipes: vi.fn(async () => [{id: 'next', name: 'Next'}]),
+      loadRecipe: vi.fn(async () => {throw new TcadApiError('disconnected', {status: 0, code: 'network_error'});}),
+      getTimeline: vi.fn(async () => ({current: -1, items: [{index: 0, state: 'current' as const, runtimeStatus: 'ready' as const, snapshotValid: true}]})),
+    });
+    render(<App api={api} viewerRuntimeFactory={stubViewerRuntime} />);
+    expect(await screen.findByRole('button', {name: '下一个有效快照'})).toBeEnabled();
+    fireEvent.click(await screen.findByRole('button', {name: '配方操作'}));
+    fireEvent.click(screen.getByRole('button', {name: '打开已保存配方'}));
+    fireEvent.click(await screen.findByRole('radio', {name: /Next/}));
+    fireEvent.click(screen.getByRole('button', {name: '打开此配方'}));
+    await waitFor(() => expect(screen.getAllByText(/当前配方状态待确认/).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole('button', {name: '关闭'}));
+    expect(screen.getByRole('textbox', {name: /Dose/})).toBeDisabled();
+    expect(screen.getByRole('combobox', {name: '添加步骤类型'})).toBeDisabled();
+    expect(screen.getByRole('textbox', {name: '步骤重命名'})).toBeDisabled();
+    expect(screen.getByRole('combobox', {name: '工艺类型'})).toBeDisabled();
+    expect(screen.getByRole('button', {name: '下一个有效快照'})).toBeDisabled();
+    expect(api.setStep).not.toHaveBeenCalled();
+  });
+
+  it('saving leaves the visible 395 nm execution reference and mounted Viewer intact', async () => {
+    const mountViewer = vi.fn();
+    const disposeViewer = vi.fn();
+    const etch = step(0, {name: 'Structure Etch', runtimeStatus: 'done',
+      params: {etch_mode: 'Depth window', depth_reference: 'Opening plane'},
+      executionResult: {referenceZNm: 395}});
+    const api = apiStub({
+      init: vi.fn(async () => ({...initView([etch]), currentRecipe: {id: 'a', name: 'A'}})),
+      saveRecipe: vi.fn(async () => ({saved: true, currentRecipe: {id: 'a', name: 'A'}})),
+      getTimeline: vi.fn(async () => ({current: 0, items: [{index: 0, state: 'current' as const, runtimeStatus: 'done' as const, snapshotValid: true}]})),
+    });
+    render(<App api={api} viewerRuntimeFactory={() => ({...stubViewerRuntime(), mount: mountViewer, dispose: disposeViewer})} />);
+    expect(await screen.findByText('395 nm')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', {name: '配方操作'}));
+    expect(screen.getByRole('textbox', {name: '配方名称'})).toHaveValue('A');
+    fireEvent.click(screen.getByRole('button', {name: '保存配方'}));
+    await screen.findByText('已保存：A');
+    expect(screen.getByText('395 nm')).toBeInTheDocument();
+    expect(mountViewer).toHaveBeenCalledTimes(1);
+    expect(disposeViewer).not.toHaveBeenCalled();
+    expect(api.runAll).not.toHaveBeenCalled(); expect(api.runStep).not.toHaveBeenCalled(); expect(api.setStep).not.toHaveBeenCalled();
+  });
+
   it('导入读取本地 JSON 文件并触发 importRecipe', async () => {
     const api = apiStub();
     render(<App api={api} viewerRuntimeFactory={stubViewerRuntime} />);

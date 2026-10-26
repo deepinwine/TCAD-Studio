@@ -428,7 +428,7 @@ function ParameterField({
 export function ParameterPanel({step, collapsed, onEditMask}: ParameterPanelProps) {
   const {state, actions} = useAppState();
   const {t, locale} = useI18n();
-  const disabled = state.phase === 'running' || state.activeMutation !== null;
+  const disabled = Boolean(state.recipeSessionUncertain) || state.phase === 'running' || state.activeMutation !== null;
   const runError = step === null ? undefined : state.stepErrors[step.index];
   const [candidates, setCandidates] = useState<Record<number, boolean>>({});
   const candidate = step !== null && candidates[step.index];
@@ -437,7 +437,7 @@ export function ParameterPanel({step, collapsed, onEditMask}: ParameterPanelProp
     const index = Number(key.slice(0, key.indexOf(':')));
     return !Number.isInteger(index) || index <= step.index;
   });
-  const referenceUntrusted = step !== null && (prefixDraft || state.phase === 'running'
+  const referenceUntrusted = step !== null && (prefixDraft || state.recipeSessionUncertain || state.phase === 'running'
     || state.pendingTypeEdits.some(index => index <= step.index)
     || state.recipe.some(item => item.index <= step.index && ['dirty', 'error', 'running'].includes(item.runtimeStatus))
     || Object.keys(state.stepErrors).some(index => Number(index) <= step.index));

@@ -14,7 +14,7 @@ export function StepTypeEditor({step, onCandidateChange}: {step: StepView; onCan
   const current = step.name === 'Structure Fill' ? 'Deposit' : step.name.replace(/^Structure /, '');
   const choice = choices[step.index] ?? (processCatalog.some(item => item.id === current) ? current : '');
   const mode = modes[step.index] ?? (step.name === 'Structure Fill' ? 'Fill' : 'Deposit');
-  const busy = state.phase === 'running' || state.activeMutation !== null;
+  const busy = Boolean(state.recipeSessionUncertain) || state.phase === 'running' || state.activeMutation !== null;
   const factory = `Structure ${choice === 'Deposit' ? mode : choice}`;
   const available = state.factoryTemplates?.some(item => item.name === factory);
   function cancel(index: number) {
