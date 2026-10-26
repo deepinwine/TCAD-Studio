@@ -6,6 +6,9 @@ import {AppStateProvider, useAppState, type AppStateContextValue} from './AppSta
 import type {AppState} from './appReducer';
 import {MaskWorkbench} from '../mask/MaskWorkbench';
 import type {MaskAsset} from '../api/types';
+import {ParameterPanel} from '../components/ParameterPanel';
+import {parseStepListEnvelope} from '../api/schemas';
+import templates from '../test/structureFactoryTemplates.json';
 function step(index: number, overrides: Partial<StepView> = {}): StepView {
   return {
     index,
@@ -308,4 +311,46 @@ it('releases a created URL even if triggering the browser download fails', async
   vi.mocked(HTMLAnchorElement.prototype.click).mockImplementationOnce(() => {throw new Error('download denied');});
   await act(async () => {expect((await exportAction()).ok).toBe(false);});
   expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:structure'); expect(captured.state.activeMutation).toBeNull();
+});
+
+function ReferencePanel() {
+  const {state} = useAppState();
+  return <ParameterPanel step={state.recipe[1] ?? null} collapsed={false} />;
+}
+it.each(['success', 'pack failure', 'download failure'] as const)('keeps resolved reference Z visible in the real panel throughout structure export: %s', async outcome => {
+  const template = parseStepListEnvelope({ok: true, result: templates}).find(item => item.name === 'Structure Etch')!;
+  const recipe = [step(0, {name: 'Structure Wafer', runtimeStatus: 'done'}), {...template, index: 1,
+    params: {...template.params, etch_mode: 'Depth window', depth_reference: 'Opening plane'},
+    runtimeStatus: 'done' as const, executionResult: {referenceZNm: 395}}];
+  const packing = deferred<typeof packageResult>(); const downloading = deferred<Blob>();
+  const api = exportApi({init: vi.fn(async () => ({...initView, recipe})),
+    prepareStructureExport: vi.fn(() => packing.promise), downloadStructureExport: vi.fn(() => downloading.promise)});
+  render(<AppStateProvider api={api}><Capture /><ReferencePanel /></AppStateProvider>);
+  expect(await screen.findByText('395 nm')).toBeVisible();
+  const before = captured.state;
+  let operation!: ReturnType<typeof exportAction>;
+  act(() => {operation = exportAction(false);});
+  expect(captured.state.activeMutation).toBe('export');
+  expect(screen.getByText('395 nm')).toBeVisible();
+  expect(screen.queryByText('未解析（需以当前输入成功构建）')).not.toBeInTheDocument();
+  await act(async () => {await captured.actions.runAll(); await captured.actions.saveRecipe('blocked'); await captured.actions.uploadMask(new File(['x'], 'mask.json'));});
+  expect(api.runAll).not.toHaveBeenCalled(); expect(api.saveRecipe).not.toHaveBeenCalled(); expect(api.uploadMask).not.toHaveBeenCalled();
+  if (outcome === 'pack failure') {
+    await act(async () => {packing.reject(new Error('pack failed')); expect((await operation).ok).toBe(false);});
+    expect(api.downloadStructureExport).not.toHaveBeenCalled();
+  } else {
+    await act(async () => {packing.resolve(packageResult); await packing.promise;});
+    expect(captured.state.activeMutation).toBe('export');
+    expect(screen.getByText('395 nm')).toBeVisible();
+    expect(screen.queryByText('未解析（需以当前输入成功构建）')).not.toBeInTheDocument();
+    await act(async () => {
+      if (outcome === 'download failure') downloading.reject(new Error('download failed')); else downloading.resolve(blob());
+      expect((await operation).ok).toBe(outcome === 'success');
+    });
+  }
+  expect(screen.getByText('395 nm')).toBeVisible();
+  expect(captured.state.phase).toBe(before.phase); expect(captured.state.activeMutation).toBeNull();
+  expect(captured.state.recipe).toBe(before.recipe); expect(captured.state.previewGeneration).toBe(before.previewGeneration);
+  expect(captured.state.model).toBe(before.model); expect(captured.state.historicalStepIndex).toBe(before.historicalStepIndex);
+  expect(captured.state.stepErrors).toBe(before.stepErrors); expect(captured.state.globalError).toBe(before.globalError);
 });

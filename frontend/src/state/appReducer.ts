@@ -351,7 +351,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
     case 'execution/resultsInvalidated':
       return {...state, recipe: withoutExecutionResults(state.recipe, action.index)};
     case 'export/started':
-      return {...state, phase: 'running', activeMutation: 'export'};
+      return {...state, activeMutation: 'export'};
     case 'run/started': {
       const executing = ['step', 'to', 'all'].includes(action.operation);
       const start = action.operation === 'step' || action.invalidateResults ? action.index : undefined;

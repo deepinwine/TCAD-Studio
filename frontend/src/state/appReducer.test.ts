@@ -685,8 +685,8 @@ it('export start and finish preserve all process, history and diagnostic fields'
     historicalStepIndex: 0, previewGeneration: 7, lastModelRevision: 42,
     timeline: {current: 0, items: [{index: 0, state: 'current', runtimeStatus: 'done', snapshotValid: true}]}};
   const started = appReducer(state, {type: 'export/started'});
-  expect(started).toEqual({...state, phase: 'running', activeMutation: 'export'});
-  for (const key of Object.keys(state) as (keyof AppState)[]) if (!['phase', 'activeMutation'].includes(key)) expect(started[key]).toBe(state[key]);
+  expect(started).toEqual({...state, activeMutation: 'export'});
+  for (const key of Object.keys(state) as (keyof AppState)[]) if (key !== 'activeMutation') expect(started[key]).toBe(state[key]);
   const finished = appReducer(started, {type: 'mutation/finished'});
   expect(finished).toEqual(state);
 });
