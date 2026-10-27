@@ -66,3 +66,19 @@ it('treats a server rejection as a definite error and network loss as uncertain'
   vi.stubGlobal('fetch', vi.fn(async () => {throw new TypeError('network');}));
   await expect(api.loadRecipe('a')).rejects.toMatchObject({code: 'network_error'} as Partial<TcadApiError>);
 });
+
+it('classifies malformed load envelopes as uncertain even when HTTP succeeds', async () => {
+  const api = createTcadApi();
+  for (const payload of [{}, {ok: 'true'}, {ok: true, result: {loaded: false}}]) {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(payload), {status: 200})));
+    await expect(api.loadRecipe('a')).rejects.toThrow(ApiContractError);
+  }
+});
+
+it('does not treat a malformed save envelope as a definite rejection', async () => {
+  const api = createTcadApi();
+  for (const payload of [{}, {ok: 'true'}]) {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(payload), {status: 200})));
+    await expect(api.saveRecipe('A')).rejects.toThrow(ApiContractError);
+  }
+});

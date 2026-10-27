@@ -179,6 +179,7 @@ export async function apiJson<T>(
   path: string,
   init: RequestInit,
   parse: (payload: unknown) => T,
+  requireExplicitRejection = false,
 ): Promise<T> {
   const requestInit: RequestInit = {...init, credentials: 'same-origin'};
   if ((requestInit.method ?? 'GET').toUpperCase() === 'GET') {
@@ -186,6 +187,11 @@ export async function apiJson<T>(
   }
   const response = await fetchSafely(path, requestInit);
   const payload = await readJsonSafely(response);
+  if (requireExplicitRejection && (!isRecord(payload)
+    || (payload.ok !== true && payload.ok !== false)
+    || (!response.ok && payload.ok !== false))) {
+    throw new ApiContractError('ok', 'explicit boolean response envelope');
+  }
   if (!response.ok || !isSuccessfulEnvelope(payload)) {
     throw toApiError(response.status, payload);
   }
@@ -205,6 +211,7 @@ export function apiPostJson<T>(
   body: unknown,
   parse: (payload: unknown) => T,
   signal?: AbortSignal,
+  requireExplicitRejection = false,
 ): Promise<T> {
   return apiJson(path, {
     method: 'POST',
@@ -212,7 +219,7 @@ export function apiPostJson<T>(
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
     signal,
-  }, parse);
+  }, parse, requireExplicitRejection);
 }
 
 export async function apiBinary(path: string, signal?: AbortSignal): Promise<ArrayBuffer> {
@@ -462,6 +469,7 @@ export function createTcadApi(): TcadApi {
         {name},
         parseSavedEnvelope,
         signal,
+        true,
       );
     },
     exportRecipe(scope: string = 'current', signal?: AbortSignal): Promise<Blob> {
@@ -473,6 +481,7 @@ export function createTcadApi(): TcadApi {
         {id},
         (payload: unknown) => parseRecipeLoadEnvelope(payload, 'loaded'),
         signal,
+        true,
       );
     },
     addStep(name: string, signal?: AbortSignal, configuration?: {params: Record<string, unknown>; instanceName?: string}): Promise<StepView[]> {

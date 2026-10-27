@@ -1,5 +1,5 @@
 import {SavedRecipesDialog} from './SavedRecipesDialog';
-import {cleanRecipeName} from './savedRecipeState';
+import {cleanRecipeName, stripRecipeName} from './savedRecipeState';
 import {useEffect, useRef, useState} from 'react';
 import {type ActiveMutation, hasUnsavedDrafts} from '../state/appReducer';
 import {useAppState} from '../state/AppStateContext';
@@ -198,7 +198,7 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
           className="toolbar-button"
           disabled={allRunsDisabled || !validRecipeName}
           onClick={() => {
-            void actions.newRecipe(recipeName.trim());
+            void actions.newRecipe(recipeName);
           }}
         >
           {t('toolbar.newRecipe')}
@@ -208,14 +208,14 @@ export function Toolbar({api, parametersCollapsed, onToggleParameters}: ToolbarP
           className="toolbar-button"
           disabled={allRunsDisabled || !validRecipeName}
           onClick={() => {
-            void actions.saveRecipe(recipeName.trim());
+            void actions.saveRecipe(recipeName);
           }}
           title={t('toolbar.saveRecipeTitle')}
         >
           {t('toolbar.saveRecipe')}
         </button>
         <span className="toolbar-gate-copy">{t('savedRecipes.rename')}</span>
-        {Array.from(recipeName.trim()).length > 80 && <span role="alert">{t('savedRecipes.invalidName')}</span>}
+        {Array.from(stripRecipeName(recipeName)).length > 80 && <span role="alert">{t('savedRecipes.invalidName')}</span>}
         {state.recipeSave && <span role="status">{t(`savedRecipes.save.${state.recipeSave.status}`, {name: state.recipeSave.name})}</span>}
         <button
           type="button"

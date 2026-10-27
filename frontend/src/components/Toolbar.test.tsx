@@ -255,6 +255,28 @@ describe('Toolbar 配方管理', () => {
     expect(api.saveRecipe).toHaveBeenCalledTimes(1);
   });
 
+  it('sends Python-stripped Unicode names from both save and new actions without JS trimming', async () => {
+    const api = apiStub();
+    render(<App api={api} viewerRuntimeFactory={stubViewerRuntime} />);
+    fireEvent.click(await screen.findByRole('button', {name: '配方操作'}));
+    const input = screen.getByRole('textbox', {name: '配方名称'});
+    const saveButton = screen.getByRole('button', {name: '保存配方'});
+    fireEvent.change(input, {target: {value: 'A'.repeat(80) + '\u0085'}});
+    expect(saveButton).toBeEnabled();
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledWith('A'.repeat(80), expect.any(AbortSignal)));
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    fireEvent.change(input, {target: {value: '\uFEFFA'}});
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledWith('\uFEFFA', expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.getByRole('button', {name: '新建配方'})).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', {name: '新建配方'}));
+    await waitFor(() => expect(api.newRecipe).toHaveBeenCalledWith('\uFEFFA', expect.any(AbortSignal)));
+    await waitFor(() => expect(screen.getByRole('textbox', {name: '配方名称'})).toHaveValue('New'));
+    fireEvent.change(screen.getByRole('textbox', {name: '配方名称'}), {target: {value: '😀'.repeat(81)}});
+    expect(saveButton).toBeDisabled();
+  });
+
   it('keeps visible editors disabled while an interrupted open awaits server resync', async () => {
     const structure = step(0, {name: 'Structure Deposit', instanceName: 'Oxide', params: {dose: 100}});
     const api = apiStub({

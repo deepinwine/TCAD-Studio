@@ -129,7 +129,7 @@ export type AppAction =
   | {type: 'timeline/restoreSucceeded'; payload: TimelineRestoreView}
   | {type: 'timeline/restoreFailed'; error: TcadApiError}
   | {type: 'history/applied'; model?: ModelSummaryView}
-  | {type: 'recipe/replaced'; recipe: StepView[]; model?: ModelSummaryView; currentRecipe?: import('../api/types').CurrentRecipeView}
+  | {type: 'recipe/replaced'; recipe: StepView[]; model?: ModelSummaryView; currentRecipe?: import('../api/types').CurrentRecipeView; preserveMutation?: boolean}
   | {type: 'recipe/stepsReplaced'; recipe: StepView[]}
   | {type: 'step/renamed'; index: number; step: StepView}
   | {type: 'mask/uploaded'; payload: SetStepView}
@@ -521,7 +521,7 @@ function reduceAppState(state: AppState, action: AppAction): AppState {
         drafts: {},
         parameterErrors: {},
         stepErrors: {},
-        activeMutation: null,
+        activeMutation: action.preserveMutation ? state.activeMutation : null,
         globalError: null,
         previewGeneration: state.previewGeneration + 1,
       };
@@ -600,7 +600,7 @@ function reduceAppState(state: AppState, action: AppAction): AppState {
 export function appReducer(state: AppState, action: AppAction): AppState {
   const next = reduceAppState(state, action);
   if (action.type !== 'recipe/saveState' && next.recipeSave && next.recipeSave.status !== 'saving'
-    && (next.recipe !== state.recipe || next.model !== state.model
+    && ((action.type !== 'timeline/loaded' && next.recipe !== state.recipe) || next.model !== state.model
       || next.historicalStepIndex !== state.historicalStepIndex || next.previewGeneration !== state.previewGeneration
       || next.drafts !== state.drafts && action.type !== 'parameter/displayChanged')) return {...next, recipeSave: undefined};
   return next;

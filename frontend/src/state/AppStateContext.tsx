@@ -810,7 +810,7 @@ export function AppStateProvider({api, children}: AppStateProviderProps) {
       if (!mountedRef.current || controller.signal.aborted) return false;
       // Optional injected APIs must provide authoritative data too.
       if (!view.model || !Array.isArray(view.recipe) || !view.currentRecipe?.id.trim()) throw new ApiContractError('load', 'authoritative recipe/model/identity');
-      dispatch({type: 'recipe/replaced', recipe: view.recipe, model: view.model, currentRecipe: view.currentRecipe});
+      dispatch({type: 'recipe/replaced', recipe: view.recipe, model: view.model, currentRecipe: view.currentRecipe, preserveMutation: true});
       dispatch({type: 'recipe/opened'});
       const generation = ++timelineGenerationRef.current;
       try {

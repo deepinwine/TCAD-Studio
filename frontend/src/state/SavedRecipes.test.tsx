@@ -1,7 +1,7 @@
 import {act, render, screen, waitFor} from '@testing-library/react';
 import {StrictMode, useEffect} from 'react';
-import {describe, expect, it, vi} from 'vitest';
-import {TcadApiError} from '../api/client';
+import {afterEach, describe, expect, it, vi} from 'vitest';
+import {createTcadApi, TcadApiError} from '../api/client';
 import {structureExportSource} from '../components/structureExportState';
 import type {
   InitView,
@@ -18,6 +18,8 @@ import {
   type AppStateContextValue,
   useAppState,
 } from './AppStateContext';
+
+afterEach(() => vi.unstubAllGlobals());
 
 function step(index: number, overrides: Partial<StepView> = {}): StepView {
   return {
@@ -342,4 +344,76 @@ it('aborts an in-flight open on unmount and ignores its late response', async ()
   pending.resolve({model: initView.model, recipe: [step(0)], currentRecipe: {id: 'late', name: 'Late'}, log: []});
   expect(await opening).toBe(false);
   expect(api.getTimeline).not.toHaveBeenCalled();
+});
+
+it.each([{}, {ok: 'true'}])('a real malformed load envelope protects writes and export until authoritative resync: %j', async malformed => {
+  const calls: string[] = [];
+  let initCount = 0;
+  const fetcher = vi.fn(async (url: string | URL | Request) => {
+    const path = String(url);
+    calls.push(path);
+    const result = path === '/api/init' ? {
+      ok: true, result: {recipe: [], model: {grid_shape: [8, 8, 8], voxel_size_nm: 10},
+        recipe_factories: [], materials: [], ui_state: {},
+        current_recipe: initCount++ === 0 ? {id: 'old', name: 'Old'} : {id: 'server', name: 'Server'}},
+    } : path === '/api/recipe/load' ? malformed
+      : path === '/api/timeline/get' ? {ok: true, result: {items: [], current: -1}}
+        : {ok: false, error: `unexpected ${path}`};
+    return new Response(JSON.stringify(result), {status: 200});
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const api = createTcadApi();
+  const view = mount(api); await waitUntilReady();
+  const previous = captured!.state;
+  await act(async () => {expect(await captured!.actions.openSavedRecipe('server')).toBe(false);});
+  expect(captured!.state.currentRecipe).toEqual({id: 'old', name: 'Old'});
+  expect(captured!.state.recipe).toBe(previous.recipe);
+  expect(captured!.state.recipeSessionUncertain).toBe(true);
+  expect(captured!.actions.beginMaskWrite(0)).toBe(false);
+  await act(async () => {
+    await captured!.actions.runAll();
+    await captured!.actions.saveRecipe('Old');
+    await captured!.actions.exportRecipe();
+  });
+  const prepared = await captured!.actions.exportStructure({source: structureExportSource(previous), acknowledged: true});
+  expect(prepared.ok).toBe(false);
+  expect(calls).toEqual(['/api/init', '/api/recipe/load']);
+  await act(async () => {expect(await captured!.actions.resyncRecipeSession()).toBe(true);});
+  expect(calls).toEqual(['/api/init', '/api/recipe/load', '/api/init', '/api/timeline/get']);
+  expect(captured!.state.currentRecipe).toEqual({id: 'server', name: 'Server'});
+  expect(captured!.state.recipeSessionUncertain).toBe(false);
+  view.unmount();
+});
+
+it('keeps confirmed save feedback across repeated read-only timeline refreshes, then clears it on an input edit', async () => {
+  const api = apiStub({
+    init: vi.fn(async () => ({...initView, currentRecipe: {id: 'a', name: 'A'}})),
+    saveRecipe: vi.fn(async () => ({saved: true, currentRecipe: {id: 'a', name: 'A'}})),
+    getTimeline: vi.fn(async () => ({items: initView.recipe.map(item => ({index: item.index,
+      state: 'pending' as const, runtimeStatus: 'ready' as const, snapshotValid: false})), current: -1})),
+  });
+  mount(api); await waitUntilReady();
+  await act(async () => {await captured!.actions.saveRecipe('A');});
+  expect(captured!.state.recipeSave).toEqual({status: 'success', name: 'A'});
+  await act(async () => {await captured!.actions.loadTimeline();});
+  expect(captured!.state.recipeSave).toEqual({status: 'success', name: 'A'});
+  await act(async () => {await captured!.actions.loadTimeline();});
+  expect(captured!.state.recipeSave).toEqual({status: 'success', name: 'A'});
+  await act(async () => {captured!.actions.updateDraft(0, 'dose', 101);});
+  expect(captured!.state.recipeSave).toBeUndefined();
+  expect(api.setStep).not.toHaveBeenCalled();
+});
+
+it('keeps the visible open operation busy until its deferred timeline refresh settles', async () => {
+  const pendingTimeline = deferred<TimelineView>();
+  const api = apiStub({getTimeline: vi.fn(() => pendingTimeline.promise)});
+  mount(api); await waitUntilReady();
+  const opening = captured!.actions.openSavedRecipe('h1');
+  await waitFor(() => expect(api.getTimeline).toHaveBeenCalledTimes(1));
+  expect(captured!.state.currentRecipe).toEqual({id: 'h1', name: 'Loaded'});
+  expect(captured!.state.activeMutation).toBe('recipe');
+  expect(captured!.state.phase).toBe('ready');
+  expect(captured!.actions.beginMaskWrite(0)).toBe(false);
+  await act(async () => {pendingTimeline.resolve(timeline); expect(await opening).toBe(true);});
+  expect(captured!.state.activeMutation).toBeNull();
 });
