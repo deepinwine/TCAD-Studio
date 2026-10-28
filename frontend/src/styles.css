@@ -1422,7 +1422,7 @@ button:focus-visible,
   .resizable-workspace > .workspace-left { width: 100%; min-height: 320px; max-height: none; flex-shrink: 0; }
   .workspace-left .process-pane { min-height: 320px; }
   .workspace-left .recipe-assistant { max-height: 200px; }
-  .workspace-viewer { order: -1; height: var(--workspace-viewer-height, 420px); min-height: 300px; flex-shrink: 0; }
+  .workspace-viewer { order: -1; height: var(--workspace-viewer-height, 420px); min-height: 420px; flex-shrink: 0; }
   .workspace-parameters { min-height: 300px; flex-shrink: 0; }
   .workspace-separator { display: none; }
   .workspace-parameters > .parameter-pane { position: static; width: 100%; height: auto; min-height: 300px; }

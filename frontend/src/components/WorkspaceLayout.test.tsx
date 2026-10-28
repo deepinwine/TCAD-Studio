@@ -62,15 +62,15 @@ describe('三栏工作区', () => {
 });
 
 it('narrow workspace publishes bounded viewer height on resize without remounting the viewer or clearing drafts',()=>{
- let height=410;let resize:()=>void=()=>{};const mounted=vi.fn(),disposed=vi.fn();
+ let height=430;let resize:()=>void=()=>{};const mounted=vi.fn(),disposed=vi.fn();
  vi.spyOn(HTMLElement.prototype,'getBoundingClientRect').mockImplementation(()=>({width:712,height} as DOMRect));
  vi.stubGlobal('ResizeObserver',class{constructor(callback:()=>void){resize=callback;}observe(){}disconnect(){}});
  function Viewer(){useEffect(()=>{mounted();return disposed;},[]);return <div>View</div>;}
  const {container,rerender,unmount}=render(<WorkspaceLayout left="Steps" viewer={<Viewer/>} parameters={<input aria-label="Height draft" defaultValue="123"/>} collapsed={false}/>);
  const workspace=container.querySelector('.studio-workspace') as HTMLElement;
- expect(workspace.style.getPropertyValue('--workspace-viewer-height')).toBe('410px');
+ expect(workspace.style.getPropertyValue('--workspace-viewer-height')).toBe('430px');
  height=900;act(()=>resize());expect(workspace.style.getPropertyValue('--workspace-viewer-height')).toBe('460px');
- height=220;act(()=>resize());expect(workspace.style.getPropertyValue('--workspace-viewer-height')).toBe('300px');
+ height=220;act(()=>resize());expect(workspace.style.getPropertyValue('--workspace-viewer-height')).toBe('420px');
  rerender(<WorkspaceLayout left="Steps" viewer={<Viewer/>} parameters={<input aria-label="Height draft" defaultValue="123"/>} collapsed/>);
  expect(mounted).toHaveBeenCalledTimes(1);expect(disposed).not.toHaveBeenCalled();expect(screen.getByLabelText('Height draft')).toHaveValue('123');unmount();expect(disposed).toHaveBeenCalledTimes(1);
 });

@@ -30,7 +30,7 @@ export function WorkspaceLayout({left, viewer, parameters, collapsed}: {left: Re
     const measure = () => {
       const rect = element.getBoundingClientRect();
       const available = rect.width;
-      if (Number.isFinite(rect.height) && rect.height > 0) setViewerHeight(Math.max(300, Math.min(460, rect.height)));
+      if (Number.isFinite(rect.height) && rect.height > 0) setViewerHeight(Math.max(420, Math.min(460, rect.height)));
       setAvailableWidth(available);
       setWidths(current => fitWidths(current, available, collapsed));
     };
