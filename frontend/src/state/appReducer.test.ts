@@ -690,3 +690,12 @@ it('export start and finish preserve all process, history and diagnostic fields'
   const finished = appReducer(started, {type: 'mutation/finished'});
   expect(finished).toEqual(state);
 });
+
+it('restored-model notice waits for a matching valid snapshot and preserves save feedback and errors',()=>{
+ const error=new TcadApiError('keep step error',{status:400});const saved={status:'success' as const,name:'Saved source'};
+ const opened={...readyState(),recipeOpened:true,recipeSave:saved,stepErrors:{1:error},globalError:error};
+ expect(appReducer(opened,{type:'timeline/loadStarted'}).recipeOpened).toBe(true);
+ for(const items of [[],[{index:1,state:'ready',runtimeStatus:'ready' as const,snapshotValid:false}],[{index:99,state:'done',runtimeStatus:'done' as const,snapshotValid:true}]])expect(appReducer(opened,{type:'timeline/loaded',payload:{items,current:-1}}).recipeOpened).toBe(true);
+ const next=appReducer(opened,{type:'timeline/loaded',payload:timeline});expect(next.recipeOpened).toBe(false);expect(next.recipeSave).toBe(saved);expect(next.stepErrors[1]).toBe(error);expect(next.globalError).toBe(error);
+ expect(appReducer(opened,{type:'run/started',operation:'all'}).recipeOpened).toBe(true);expect(appReducer(opened,{type:'run/failed',index:1,error}).recipeOpened).toBe(true);expect(appReducer(opened,{type:'timeline/loadFailed',error}).recipeOpened).toBe(true);
+});
