@@ -599,7 +599,7 @@ function reduceAppState(state: AppState, action: AppAction): AppState {
 // Persistence feedback belongs to the saved source, never to later process edits.
 export function appReducer(state: AppState, action: AppAction): AppState {
   let next = reduceAppState(state, action);
-  if (next.recipeOpened && ['timeline/loaded', 'timeline/restoreSucceeded', 'run/recovered'].includes(action.type)
+  if (next.recipeOpened && ['timeline/loaded', 'timeline/restoreSucceeded', 'run/recovered', 'reconcile/succeeded'].includes(action.type)
     && next.timeline?.items.some(item => item.snapshotValid && next.recipe.some(step => step.index === item.index))) {
     next = {...next, recipeOpened: false};
   }

@@ -699,3 +699,8 @@ it('restored-model notice waits for a matching valid snapshot and preserves save
  const next=appReducer(opened,{type:'timeline/loaded',payload:timeline});expect(next.recipeOpened).toBe(false);expect(next.recipeSave).toBe(saved);expect(next.stepErrors[1]).toBe(error);expect(next.globalError).toBe(error);
  expect(appReducer(opened,{type:'run/started',operation:'all'}).recipeOpened).toBe(true);expect(appReducer(opened,{type:'run/failed',index:1,error}).recipeOpened).toBe(true);expect(appReducer(opened,{type:'timeline/loadFailed',error}).recipeOpened).toBe(true);
 });
+
+it('explicit run reconciliation also retires the restored notice when a valid snapshot exists',()=>{
+ const opened={...readyState(),recipeOpened:true};
+ expect(appReducer(opened,{type:'reconcile/succeeded',payload:timeline}).recipeOpened).toBe(false);
+});
