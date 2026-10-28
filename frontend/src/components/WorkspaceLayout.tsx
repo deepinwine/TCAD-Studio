@@ -21,13 +21,16 @@ export function WorkspaceLayout({left, viewer, parameters, collapsed}: {left: Re
   const {t} = useI18n();
   const [widths, setWidths] = useState({left: 280, right: 320});
   const [availableWidth, setAvailableWidth] = useState(0);
+  const [viewerHeight, setViewerHeight] = useState(420);
   const workspace = useRef<HTMLDivElement>(null);
   const drag = useRef<{side: 'left' | 'right'; pointerId: number; startX: number; width: number} | null>(null);
   useLayoutEffect(() => {
     const element = workspace.current;
     if (!element) return;
     const measure = () => {
-      const available = element.getBoundingClientRect().width;
+      const rect = element.getBoundingClientRect();
+      const available = rect.width;
+      if (Number.isFinite(rect.height) && rect.height > 0) setViewerHeight(Math.max(300, Math.min(460, rect.height)));
       setAvailableWidth(available);
       setWidths(current => fitWidths(current, available, collapsed));
     };
@@ -53,7 +56,7 @@ export function WorkspaceLayout({left, viewer, parameters, collapsed}: {left: Re
       onPointerUp={event => {if (drag.current?.pointerId === event.pointerId) {drag.current = null; event.currentTarget.releasePointerCapture(event.pointerId);}}}
       onPointerCancel={() => {drag.current = null;}} onLostPointerCapture={() => {drag.current = null;}} />;
   }
-  return <div ref={workspace} className={`studio-workspace resizable-workspace${collapsed ? ' parameters-collapsed' : ''}`} style={{'--flow-width': `${widths.left}px`, '--parameter-width': `${widths.right}px`} as CSSProperties}>
+  return <div ref={workspace} className={`studio-workspace resizable-workspace${collapsed ? ' parameters-collapsed' : ''}`} style={{'--workspace-viewer-height': `${viewerHeight}px`, '--flow-width': `${widths.left}px`, '--parameter-width': `${widths.right}px`} as CSSProperties}>
     <div className="workspace-left">{left}</div>{separator('left')}
     <div className="workspace-viewer">{viewer}</div>{separator('right')}
     <div className="workspace-parameters" hidden={collapsed}>{parameters}</div>
