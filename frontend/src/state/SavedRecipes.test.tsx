@@ -417,3 +417,27 @@ it('keeps the visible open operation busy until its deferred timeline refresh se
   await act(async () => {pendingTimeline.resolve(timeline); expect(await opening).toBe(true);});
   expect(captured!.state.activeMutation).toBeNull();
 });
+
+it('open, partial failure and late timelines keep restored notices bound to the current saved recipe',async()=>{
+ const oldRead=deferred<TimelineView>(),lateRead=deferred<TimelineView>();
+ const empty:TimelineView={items:initView.recipe.map(item=>({index:item.index,state:'ready',runtimeStatus:'ready',snapshotValid:false})),current:-1};
+ const partial:TimelineView={items:[{index:0,state:'done',runtimeStatus:'done',snapshotValid:true},{index:1,state:'error',runtimeStatus:'error',snapshotValid:false}],current:0};
+ const failure=new TcadApiError('partial build failed',{status:400,details:{stepIndex:1},rolledBack:true});
+ let current='old';const source=()=>({...initView,currentRecipe:{id:current,name:current},recipe:initView.recipe.map(item=>({...item,stepId:current+'-'+item.index,instanceName:current}))});
+ const api=apiStub({init:vi.fn(async()=>source()),loadRecipe:vi.fn(async id=>{current=id;return {...source(),log:[]};}),runAll:vi.fn(async()=>{throw failure;}),
+  getTimeline:vi.fn().mockImplementationOnce(()=>oldRead.promise).mockResolvedValueOnce(empty).mockResolvedValueOnce(partial).mockImplementationOnce(()=>lateRead.promise).mockResolvedValueOnce(empty)});
+ mount(api);await waitUntilReady();
+ let reading:Promise<void>;act(()=>{reading=captured!.actions.loadTimeline();});
+ await act(async()=>{expect(await captured!.actions.openSavedRecipe('A')).toBe(true);});
+ expect(captured!.state.recipeOpened).toBe(true);expect(captured!.state.currentRecipe?.id).toBe('A');
+ await act(async()=>{oldRead.resolve(partial);await reading!;});
+ expect(captured!.state.recipeOpened).toBe(true);expect(captured!.state.timeline).toEqual(empty);
+ await act(async()=>{await captured!.actions.runAll();});
+ expect(captured!.state.recipeOpened).toBe(false);expect(captured!.state.stepErrors[1]).toBe(failure);expect(captured!.state.recipe[1].runtimeStatus).toBe('error');expect(captured!.state.timeline?.items[0].snapshotValid).toBe(true);
+ let late:Promise<void>;act(()=>{late=captured!.actions.loadTimeline();});
+ await act(async()=>{expect(await captured!.actions.openSavedRecipe('B')).toBe(true);});
+ expect(captured!.state.recipeOpened).toBe(true);
+ await act(async()=>{lateRead.resolve(partial);await late!;});
+ expect(captured!.state.currentRecipe?.id).toBe('B');expect(captured!.state.recipeOpened).toBe(true);expect(captured!.state.timeline).toEqual(empty);expect(captured!.state.recipe.map(item=>item.stepId)).toEqual(['B-0','B-1']);
+ expect(api.runAll).toHaveBeenCalledTimes(1);expect(api.loadRecipe).toHaveBeenCalledTimes(2);expect(api.setStep).not.toHaveBeenCalled();
+});
