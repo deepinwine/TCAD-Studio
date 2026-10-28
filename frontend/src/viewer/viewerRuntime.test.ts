@@ -148,3 +148,32 @@ it.each(['top', 'bottom'] as const)('%s keeps real OrbitControls drag active aft
     assertLocal();
   } finally {runtime.dispose();}
 });
+
+it('26 navigation directions fit the real camera and publish coalesced orientation without requests', async () => {
+ const {runtime,target,flush,assertLocal}=await cameraFixture();
+ try {
+  expect(runtime.setViewDirection).toBeTypeOf('function'); expect(runtime.subscribeOrientation).toBeTypeOf('function');
+  const received:(readonly number[])[]=[];const unsubscribe=runtime.subscribeOrientation!(q=>received.push(q));expect(received).toHaveLength(1);
+  for(const mode of ['perspective','orthographic'] as const){runtime.setProjection(mode);
+   for(const x of [-1,0,1])for(const y of [-1,0,1])for(const z of [-1,0,1])if(x||y||z){
+    runtime.setViewDirection!([x,y,z]);const camera=flush();
+    expect(camera.position.clone().sub(target).normalize().distanceTo(new THREE.Vector3(x,y,z).normalize())).toBeLessThan(2e-6);
+    expect(camera.type).toBe(mode==='perspective'?'PerspectiveCamera':'OrthographicCamera');
+    expect(new THREE.Quaternion(...received.at(-1) as [number,number,number,number]).angleTo(camera.quaternion)).toBeLessThan(1e-6);
+    for(const a of [-60,60])for(const b of [-40,40])for(const c of [0,400]){const p=new THREE.Vector3(a,b,c).project(camera);expect(Math.abs(p.x)).toBeLessThanOrEqual(1.00001);expect(Math.abs(p.y)).toBeLessThanOrEqual(1.00001);}
+   }
+  }
+  const previous=received.length;runtime.setViewDirection!([1,0,0]);runtime.setViewDirection!([0,1,0]);flush();expect(received.length).toBe(previous+1);
+  const pose=flush().position.clone();runtime.setViewDirection!([NaN,1,0]);runtime.setViewDirection!([0,0,0]);expect(flush().position.equals(pose)).toBe(true);
+  unsubscribe();const count=received.length;runtime.setStandardView('front');flush();expect(received).toHaveLength(count);assertLocal();
+ }finally{runtime.dispose();}
+});
+it('orientation follows real OrbitControls drag and subscriptions stop after disposal',async()=>{
+ const {runtime,host,flush,assertLocal}=await cameraFixture();
+ try{
+  expect(runtime.subscribeOrientation).toBeTypeOf('function');const updates:(readonly number[])[]=[];runtime.subscribeOrientation!(q=>updates.push(q));flush();const before=updates.at(-1);
+  const canvas=host.querySelector('canvas')!;Object.defineProperty(canvas,'clientHeight',{value:600});canvas.setPointerCapture=vi.fn();canvas.releasePointerCapture=vi.fn();
+  for(const [type,x,y] of [['pointerdown',200,200],['pointermove',270,160],['pointerup',270,160]] as const)(type==='pointerdown'?canvas:document).dispatchEvent(Object.assign(new MouseEvent(type,{bubbles:true,button:0,clientX:x,clientY:y}),{pointerId:1,pointerType:'mouse'}));
+  const camera=flush();expect(updates.at(-1)).not.toEqual(before);expect(updates.at(-1)).toEqual(camera.quaternion.toArray());assertLocal();const count=updates.length;runtime.dispose();flush();expect(updates).toHaveLength(count);
+ }finally{runtime.dispose();}
+});

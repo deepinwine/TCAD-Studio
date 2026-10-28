@@ -11,6 +11,8 @@ import {createMeshLoader, type LoadedMesh} from './meshLoader';
 import {pickAtNormalizedCoords, type PickCandidate, type PickHit} from './picking';
 
 export type StandardView = 'iso' | 'top' | 'bottom' | 'front' | 'back' | 'left' | 'right';
+export type ViewDirection = readonly [number, number, number];
+export type CameraOrientation = readonly [number, number, number, number];
 export type ProjectionMode = 'perspective' | 'orthographic';
 
 export interface MaterialSummary {
@@ -32,6 +34,8 @@ export interface ViewerRuntime {
   setSectionContext?(model: ModelSummaryView | null, onError: (error: unknown | null) => void): void;
   readonly backend: string;
   mount(container: HTMLElement): void;
+  setViewDirection?(direction: ViewDirection): void;
+  subscribeOrientation?(listener: (orientation: CameraOrientation) => void): () => void;
   setStandardView(view: StandardView): void;
   setProjection(mode: ProjectionMode): void;
   setClipping(state: ClipState): void;
@@ -71,6 +75,8 @@ export function createThreeViewerRuntime(api: TcadApi): ViewerRuntime {
   let container: HTMLElement | null = null;
   let canvas: HTMLCanvasElement | null = null;
   let renderHandle = 0;
+  const orientationListeners = new Set<(orientation: CameraOrientation) => void>();
+  let lastOrientation: THREE.Quaternion | null = null;
   let disposed = false;
   let firstLoadDone = false;
   let backendLabel = 'WebGL2';
@@ -150,6 +156,11 @@ export function createThreeViewerRuntime(api: TcadApi): ViewerRuntime {
       const current = activeCamera();
       if (current === null) return;
       renderer.render(scene, current);
+      if (lastOrientation === null || Math.abs(current.quaternion.dot(lastOrientation)) < 1 - 1e-12) {
+        lastOrientation = current.quaternion.clone();
+        const orientation = current.quaternion.toArray() as [number, number, number, number];
+        for (const listener of orientationListeners) listener(orientation);
+      }
     });
   };
 
@@ -291,6 +302,19 @@ export function createThreeViewerRuntime(api: TcadApi): ViewerRuntime {
       resizeObserver.observe(host);
       resize();
       applyPose(VIEW_DIRECTIONS.iso);
+    },
+    setViewDirection(direction) {
+      if (disposed || direction.length !== 3 || !direction.every(Number.isFinite)) return;
+      const vector = new THREE.Vector3(...direction);
+      if (!Number.isFinite(vector.lengthSq()) || vector.lengthSq() < 1e-20) return;
+      applyPose(vector.normalize());
+    },
+    subscribeOrientation(listener) {
+      if (disposed) return () => {};
+      orientationListeners.add(listener);
+      const view = activeCamera();
+      if (view !== null) listener(view.quaternion.toArray() as [number, number, number, number]);
+      return () => {orientationListeners.delete(listener);};
     },
     setStandardView(view: StandardView) {
       applyPose(VIEW_DIRECTIONS[view]);
@@ -482,6 +506,7 @@ export function createThreeViewerRuntime(api: TcadApi): ViewerRuntime {
     },
     dispose() {
       disposed = true;
+      orientationListeners.clear();
       sectionGeneration++; sections.dispose();
       if (renderHandle !== 0) {
         cancelAnimationFrame(renderHandle);
