@@ -12,13 +12,15 @@ interface Props {
 export function NavigationCube({orientation, onChoose, disabled}: Props) {
   const {t} = useI18n();
   const [hovered, setHovered] = useState('');
+  const patches = projectNavigation(orientation);
+  const activeDirection = patches.find(target => Math.hypot(target.center[0] - 72, target.center[1] - 72) < 1e-3)?.id ?? '';
   const faceKey = (axis: number, sign: number): TranslationKey => `viewer.navigation.${axis === 0 ? sign > 0 ? 'right' : 'left' : axis === 1 ? sign > 0 ? 'back' : 'front' : sign > 0 ? 'top' : 'bottom'}`;
   const label = (direction: ViewDirection) => [2,1,0].filter(axis => direction[axis] !== 0).map(axis => t(faceKey(axis,direction[axis]))).join(' · ');
   const choose = (direction: ViewDirection) => {if (!disabled) onChoose(direction);};
   return <div className="navigation-cube" role="group" aria-label={t('viewer.navigation.title')}
     onPointerDown={event => event.stopPropagation()} onPointerUp={event => event.stopPropagation()}>
     <svg viewBox="0 0 144 144" aria-label={t('viewer.navigation.hint')}>
-      {projectNavigation(orientation).map(target => {
+      {patches.map(target => {
         const name = label(target.direction);
         return <g key={target.id} role="button" tabIndex={disabled ? -1 : 0} aria-label={name} aria-disabled={disabled}
           data-direction={target.id} className={`navigation-target navigation-${target.kind}`}
@@ -32,7 +34,7 @@ export function NavigationCube({orientation, onChoose, disabled}: Props) {
       <text className="navigation-axes" x="72" y="140" textAnchor="middle">X · Y · Z</text>
     </svg>
     <span className="navigation-caption" role="status">{hovered || t('viewer.navigation.title')}</span>
-    <select aria-label={t('viewer.navigation.choose')} defaultValue="" disabled={disabled} onChange={event => {
+    <select aria-label={t('viewer.navigation.choose')} value={activeDirection} disabled={disabled} onChange={event => {
       const target = NAVIGATION_TARGETS.find(item => item.id === event.target.value);
       if (target) choose(target.direction);
     }}>

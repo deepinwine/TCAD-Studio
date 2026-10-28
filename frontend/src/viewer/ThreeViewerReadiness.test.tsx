@@ -16,7 +16,7 @@ function runtimeFixture(order: string[]) {
 }
 
 it.each([
-  ['顶视图', 'setStandardView', 'button'], ['适应窗口', 'fit', 'button'],
+  ['顶视图', 'setStandardView', 'button'], ['居中并适应窗口', 'fit', 'button'],
   ['正交视图', 'setProjection', 'button'], ['测量模式', 'setMeasureMarkers', 'button'],
   ['启用 Z 裁剪', 'setClipping', 'checkbox'],
 ] as const)('honors immediate %s interaction before passive effects', async (label, method, role) => {

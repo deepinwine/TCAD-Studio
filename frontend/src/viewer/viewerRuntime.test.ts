@@ -177,3 +177,13 @@ it('orientation follows real OrbitControls drag and subscriptions stop after dis
   const camera=flush();expect(updates.at(-1)).not.toEqual(before);expect(updates.at(-1)).toEqual(camera.quaternion.toArray());assertLocal();const count=updates.length;runtime.dispose();flush();expect(updates).toHaveLength(count);
  }finally{runtime.dispose();}
 });
+
+it('center and fit restores a panned model while preserving viewing direction and making no requests',async()=>{
+ const {runtime,host,target,flush,assertLocal}=await cameraFixture();
+ try{
+  const canvas=host.querySelector('canvas')!;Object.defineProperty(canvas,'clientHeight',{value:600});canvas.setPointerCapture=vi.fn();canvas.releasePointerCapture=vi.fn();
+  for(const [type,x,y] of [['pointerdown',200,200],['pointermove',360,270],['pointerup',360,270]] as const)(type==='pointerdown'?canvas:document).dispatchEvent(Object.assign(new MouseEvent(type,{bubbles:true,button:2,clientX:x,clientY:y}),{pointerId:2,pointerType:'mouse'}));
+  const camera=flush(),direction=camera.getWorldDirection(new THREE.Vector3());expect(target.clone().project(camera).length()).toBeGreaterThan(.1);
+  runtime.fit();const fitted=flush(),center=target.clone().project(fitted);expect(Math.abs(center.x)).toBeLessThan(1e-8);expect(Math.abs(center.y)).toBeLessThan(1e-8);expect(fitted.getWorldDirection(new THREE.Vector3()).distanceTo(direction)).toBeLessThan(1e-8);assertLocal();
+ }finally{runtime.dispose();}
+});
