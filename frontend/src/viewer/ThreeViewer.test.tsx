@@ -1,4 +1,4 @@
-import {cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
+import {act, cleanup, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {Vector3} from 'three';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {TcadApiError} from '../api/client';
@@ -215,7 +215,7 @@ describe('ThreeViewer', () => {
     await screen.findByText('WebGL2');
     const callsBeforeCamera = calls.apiCalls;
     fireEvent.click(screen.getByRole('button', {name: 'ISO 视图'}));
-    fireEvent.click(screen.getByRole('button', {name: '适应窗口'}));
+    fireEvent.click(screen.getByRole('button', {name: '居中并适应窗口'}));
     expect(calls.apiCalls).toBe(callsBeforeCamera);
     expect(calls.standardViews).toEqual(['iso']);
     expect(calls.fits).toBe(1);
@@ -439,4 +439,15 @@ describe('ThreeViewer', () => {
     expect(screen.getByRole('checkbox', {name: '启用 X 裁剪'})).toBeDisabled();
     expect(screen.getByRole('slider', {name: 'X 裁剪位置'})).toBeDisabled();
   });
+});
+
+it('navigation subscribes to the mounted camera, handles direction choices and cleans up without remounting or reloading',async()=>{
+ const unsubscribe=vi.fn();let update:(q:readonly [number,number,number,number])=>void=()=>{};
+ const {runtime,calls}=fakeViewerRuntime({setViewDirection:vi.fn(),subscribeOrientation:vi.fn(listener=>{update=listener;listener([0,0,0,1]);return unsubscribe;})});
+ const factory=()=>runtime;const {unmount}=render(<ThreeViewer api={apiStub} refreshToken={1} runtimeFactory={factory}/>);
+ expect(await screen.findByRole('button',{name:'居中并适应窗口'})).toBeInTheDocument();
+ fireEvent.change(screen.getByRole('combobox',{name:'选择视角'}),{target:{value:'1,-1,1'}});expect(runtime.setViewDirection).toHaveBeenCalledWith([1,-1,1]);
+ fireEvent.click(screen.getByRole('button',{name:'居中并适应窗口'}));expect(calls.fits).toBe(1);
+ await act(async()=>update([1,0,0,0]));expect(screen.getByRole('button',{name:'底'})).toBeInTheDocument();
+ expect(runtime.mount).toHaveBeenCalledTimes(1);expect(runtime.loadMeshes).toHaveBeenCalledTimes(1);unmount();expect(unsubscribe).toHaveBeenCalledTimes(1);expect(runtime.dispose).toHaveBeenCalledTimes(1);
 });

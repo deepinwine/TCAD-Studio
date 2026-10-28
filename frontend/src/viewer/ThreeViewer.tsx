@@ -1,3 +1,5 @@
+import {NavigationCube} from './NavigationCube';
+import type {CameraOrientation} from './viewerRuntime';
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import type {PointerEvent as ReactPointerEvent} from 'react';
 import {TcadApiError} from '../api/client';
@@ -52,6 +54,8 @@ export function ThreeViewer({api, model = null, refreshToken, runtimeFactory, hi
   const {t} = useI18n();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const runtimeRef = useRef<ViewerRuntime | null>(null);
+  const [orientation, setOrientation] = useState<CameraOrientation>([0,0,0,1]);
+  const [navigationAvailable, setNavigationAvailable] = useState(false);
   const [backend, setBackend] = useState<string | null>(null);
   const [initError, setInitError] = useState<TcadApiError | null>(null);
   const [loadError, setLoadError] = useState<TcadApiError | null>(null);
@@ -84,9 +88,12 @@ export function ThreeViewer({api, model = null, refreshToken, runtimeFactory, hi
       return;
     }
     runtimeRef.current = runtime;
+    const unsubscribe = runtime.subscribeOrientation?.(setOrientation);
+    setNavigationAvailable(Boolean(runtime.subscribeOrientation && runtime.setViewDirection));
     setBackend(runtime.backend);
     setInitError(null);
     return () => {
+      unsubscribe?.();
       runtimeRef.current = null;
       setBackend(null);
       runtime.dispose();
@@ -298,6 +305,7 @@ export function ThreeViewer({api, model = null, refreshToken, runtimeFactory, hi
         onPointerDown={handlePointerDown}
         onPointerUp={handlePointerUp}
       >
+        {navigationAvailable && <NavigationCube orientation={orientation} disabled={initError !== null} onChoose={direction => runtimeRef.current?.setViewDirection?.(direction)} />}
         <MaterialPanel
           materials={materials}
           display={display}

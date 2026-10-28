@@ -1449,3 +1449,17 @@ button:focus-visible,
 .saved-recipes-row span {min-width: 0; overflow-wrap: anywhere;}
 .saved-recipes-row small {display: block; opacity: .8; margin-top: 4px;}
 .saved-recipes-row em {margin-left: 10px; color: #82c5fa;}
+
+/* Camera navigation remains an overlay; blank space still reaches the model canvas. */
+.navigation-cube { position: absolute; z-index: 2; top: 8px; right: 8px; width: 136px; pointer-events: none; color: #dce7f2; }
+.navigation-cube svg { display: block; width: 136px; height: 136px; overflow: visible; pointer-events: none; }
+.navigation-target { pointer-events: visiblePainted; cursor: pointer; outline: none; }
+.navigation-target polygon { fill: #30475e; stroke: #91aac1; stroke-width: .9; stroke-linejoin: round; }
+.navigation-edge polygon { fill: #203446; }
+.navigation-corner polygon { fill: #162b3b; }
+.navigation-target:hover polygon, .navigation-target:focus-visible polygon { fill: #347db1; stroke: #c1e7ff; stroke-width: 2; }
+.navigation-target[aria-disabled='true'] { cursor: default; opacity: .5; }
+.navigation-target text { pointer-events: none; fill: #eff7ff; font-size: 11px; font-weight: 600; }
+.navigation-axes { fill: #9ac7e7; font-size: 9px; pointer-events: none; }
+.navigation-caption { display: block; min-height: 15px; font-size: 10px; text-align: center; }
+.navigation-cube select { pointer-events: auto; width: 100%; min-width: 0; padding: 3px; color: #dae6f4; background: #132331; border: 1px solid #405974; border-radius: 4px; font-size: 10px; }
